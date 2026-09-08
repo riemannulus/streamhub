@@ -1,0 +1,26 @@
+{
+  "name": "streamhub",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "start": "bun packages/host/src/main.ts",
+    "demo": "bun scripts/demo.ts",
+    "check": "bun run typecheck && bun test",
+    "client": "bun scripts/client.ts",
+    "hid:check": "bun scripts/hid-check.ts",
+    "hid:restore": "bun scripts/hid-restore.ts",
+    "hid:lifecycle-check": "bun scripts/hid-lifecycle-check.ts",
+    "build": "bun scripts/build.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@elgato-stream-deck/node": "7.6.3",
+    "sharp": "0.34.5"
+  }
+}

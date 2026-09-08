@@ -1,0 +1,7 @@
+{
+  "kind": "live",
+  "id": "example-session",
+  "level": "urgent",
+  "label": "권한 확인 대기",
+  "detail": "데모 신호입니다. 실제 Claude 세션과 연결되지 않습니다."
+}

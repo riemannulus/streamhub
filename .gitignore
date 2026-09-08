@@ -1,0 +1,7 @@
+node_modules/
+.streamhub/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.owner*
