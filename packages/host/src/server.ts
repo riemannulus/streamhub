@@ -2,7 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { SignalStore } from './store';
 import { ActionRegistry } from './actions';
 import { exact, HttpError, object, parseLive, readJson, text } from './validation';
-export type SourceConfig = { token: string; allowedHosts?: string[] };
+import { validateAuthConfig, type SourceConfig } from './config';
+export type { SourceConfig } from './config';
 export type ServerOptions = { store: SignalStore; port?: number; adminToken: string; sources: Record<string, SourceConfig>; actions?: ActionRegistry; health?: () => unknown; display?:()=>unknown };
 function authorize(request: Request, token?: string) {
   const supplied = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
@@ -11,9 +12,7 @@ function authorize(request: Request, token?: string) {
 export function startServer(options: ServerOptions) {
   const { store } = options;
   const actions = options.actions ?? new ActionRegistry();
-  const tokens = [options.adminToken, ...Object.values(options.sources).map(source => source.token)];
-  if (tokens.some(token => typeof token !== 'string' || token.length < 32) || new Set(tokens).size !== tokens.length) throw new Error('Distinct tokens of at least 32 characters are required');
-  if (Object.keys(options.sources).some(name => !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name))) throw new Error('Invalid source name');
+  validateAuthConfig(options);
   return Bun.serve({
     hostname: '127.0.0.1', port: options.port ?? 31415, maxRequestBodySize: 1024 * 1024,
     async fetch(request) {

@@ -4,6 +4,50 @@ import { startDisplay } from './display';
 import type { SessionState } from './session-monitor';
 import { SessionDeck, type DeckPage } from '../../streamdeck';
 
+test('monitor startup failure cleans an already-acquired display',async()=>{
+  const store=new SignalStore(':memory:');const calls:string[]=[];
+  try{
+    await expect(startDisplay(store,'/unused',{
+      connect:async()=>({write:async()=>{},standby:async()=>{calls.push('standby');},close:async()=>{calls.push('close');}}),
+      monitor:async()=>{await Bun.sleep(0);throw new Error('monitor startup failed');},
+    })).rejects.toThrow('monitor startup failed');
+    expect(calls).toEqual(['standby','close']);
+  }finally{store.close();}
+});
+
+test('cancelled monitor startup ignores late active callbacks and disposes its late handle',async()=>{
+  const store=new SignalStore(':memory:');const calls:string[]=[];
+  const controller=new AbortController();let callback!:(state:SessionState)=>void;
+  let finish!:(handle:{stop():Promise<void>})=>void;
+  const starting=startDisplay(store,'/unused',{
+    signal:controller.signal,
+    connect:async()=>({write:async()=>{calls.push('write');},standby:async()=>{},close:async()=>{calls.push('close');}}),
+    monitor:async(onState)=>{callback=onState;return new Promise(resolve=>{finish=resolve;});},
+  });
+  await Bun.sleep(0);controller.abort();
+  callback({active:true,reason:'active'});
+  finish({stop:async()=>{calls.push('late-monitor-stop');}});
+  await expect(starting).rejects.toMatchObject({name:'AbortError'});
+  store.close();
+  expect(calls).not.toContain('write');
+  expect(calls.at(-1)).toBe('late-monitor-stop');
+});
+
+test('display stop shares one promise and attempts hardware cleanup after monitor stop rejection',async()=>{
+  const store=new SignalStore(':memory:');const calls:string[]=[];
+  const display=await startDisplay(store,'/unused',{
+    connect:async()=>({write:async()=>{},standby:async()=>{calls.push('standby');},close:async()=>{calls.push('close');}}),
+    monitor:async(callback)=>{callback({active:true,reason:'active'});return{stop:async()=>{calls.push('monitor-stop');throw new Error('monitor close failed');}};},
+  });
+  await waitFor(()=>display.status().inputEnabled);
+  calls.length=0;
+  const one=display.stop(),two=display.stop();
+  expect(two).toBe(one);
+  await expect(one).rejects.toBeInstanceOf(AggregateError);
+  expect(calls).toContain('standby');expect(calls).toContain('close');expect(calls).toContain('monitor-stop');
+  store.close();
+});
+
 test('canceling one logical release preserves the remaining hold and page barrier',()=>{
   const deck=new SessionDeck();
   deck.update(Array.from({length:13},(_,i)=>({source:'a',id:String(i),kind:'live' as const,label:String(i),level:'info' as const,revision:i+1,createdAt:1,updatedAt:1,freshness:'fresh' as const})));
@@ -59,7 +103,7 @@ test('active notifications cannot override refresh failure and healthy data resu
     connect:async()=>({write:async(value)=>{frame=value;writes++;},standby:async()=>{},close:async()=>{}}),
     monitor:async(callback)=>{state=callback;callback({active:true,reason:'active'});return{stop:async()=>{}};},
   });
-  const records=store.records.bind(store);
+const records=store.records.bind(store);
   try{
     await waitFor(()=>display.status().inputEnabled);
     state({active:false,reason:'locked'});

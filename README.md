@@ -31,6 +31,8 @@ bun run client remove demo example-session sample-removal-1
 
 첫 실행은 `.streamhub/config.json`에 관리자 토큰과 `demo` 소스 토큰을 생성합니다. 파일은 0600, 새 디렉터리는 0700 권한이며 토큰을 콘솔에 출력하지 않습니다. DB도 같은 디렉터리에 둡니다. `STREAMHUB_CONFIG=/absolute/path/config.json`으로 위치를 바꿀 수 있습니다. 서버는 `127.0.0.1:31415`에만 바인딩합니다. Ctrl-C로 종료합니다.
 
+등록과 시작은 같은 설정 검증을 사용합니다. 잘못된 설정은 DB나 서버를 열기 전에 거부합니다. 같은 DB를 쓰는 호스트가 이미 실행 중이면 새 실행을 거부하고 재시작 방법을 안내합니다. 기존 호스트는 실행 중인 터미널에서 Ctrl-C로 종료한 뒤 다시 시작하세요.
+
 CLI가 설정의 토큰을 읽어 요청합니다. 재시도는 같은 delivery id를 사용하고, 내용을 바꾸는 갱신은 새 delivery id를 사용합니다. 같은 delivery id에 다른 내용을 보내면 충돌로 거부합니다.
 
 ## 지금 동작하는 범위
@@ -89,6 +91,8 @@ CLI가 설정의 토큰을 읽어 요청합니다. 재시도는 같은 delivery 
 
 - `packages/core/src`: 장치·제품·파일 입출력에 의존하지 않는 상태 전이.
 - `packages/host/src`: 저장, HTTP, 검증, 수집, 실행 관리.
+- `packages/host/src/runtime.ts`: 호스트 시작·종료, 시작 중 취소와 실패 시 자원 회수. `main.ts`는 프로세스 신호와 종료 코드만 연결합니다.
+- `packages/host/src/config.ts`: 설정 생성·검증·원자적 갱신. CLI 등록과 호스트 실행이 공유합니다.
 - `packages/streamdeck`: 논리 배치, 입력 의도, 렌더링과 HID 수명 관리.
 - [v4 설계](docs/design/local-signal-bus-v4.md), [이번 구현 범위](docs/design/bun-implementation-plan.md).
 
@@ -114,11 +118,14 @@ Bun 1.4.0에서 실제 **Stream Deck MK.2 / 펌웨어 1.02.000**을 열고 15개
 
 ## 자동 대기화면과 세션 보드
 
-생성된 `.streamhub/config.json`에 다음 항목을 추가한 뒤 `bun start`로 실행합니다.
+최초 한 번 스트림덱 출력을 등록한 뒤 실행합니다.
 
-```json
-"streamdeck": { "enabled": true }
+```sh
+bun run streamdeck:register
+bun start
 ```
+
+등록 명령은 설정이 없으면 생성하고 `streamdeck.enabled`를 켭니다. 기존 토큰과 다른 설정은 보존하며, 여러 번 실행해도 됩니다. `STREAMHUB_CONFIG`를 지정했다면 그 설정 파일에 적용합니다. 이후에는 `bun start`만 실행하면 됩니다. 이미 실행 중인 호스트에는 재시작 후 반영됩니다. 등록 자체는 설정만 저장하며 실제 장치 연결은 시작할 때 수행합니다.
 
 설정이 없거나 false이면 기존 HTTP 전용 실행을 유지합니다. 활성화하면 호스트가 100ms마다 최신 신호를 확인하고 바뀐 화면만 요청합니다. 연결된 장치는 15키·72×72 한 대여야 합니다. Elgato 앱과 동시에 이미지를 쓰면 화면이 경쟁하므로 직접 HID 사용 중에는 해당 앱을 종료합니다.
 
@@ -134,6 +141,8 @@ Bun 1.4.0에서 실제 **Stream Deck MK.2 / 펌웨어 1.02.000**을 열고 15개
 슬롯/페이지 배치는 SQLite에 보존합니다. 물리 버튼은 페이지 탐색과 핀 이동만 수행하며 focus/open/승인 액션은 아직 실행하지 않습니다. CLI `deck`은 별도의 일회성 텍스트 미리보기입니다.
 
 macOS 모니터는 Swift helper를 소스 해시별로 `.streamhub/native`에 빌드하므로 **Xcode Command Line Tools**가 필요합니다. 빌드나 세션 확인이 실패하면 화면 출력을 허용하지 않습니다. 잠자기·세션 전환은 NSWorkspace, 잠금은 macOS 분산 알림과 세션 딕셔너리를 사용합니다. 잠금 알림/키는 Apple의 공개 안정 계약이 아니므로 OS 업데이트 시 다시 확인해야 합니다.
+
+초기 컴파일 중 종료를 요청하면 화면 활성화를 차단하고 감시기 준비·정리가 끝날 때까지 기다립니다. 컴파일 제한 시간은 60초입니다. 호스트는 디스플레이 정리 실패가 나더라도 HTTP 서버·진행 중 수집·DB 정리를 이어서 시도합니다.
 
 OS가 이미 USB를 중단한 잠자기, USB 분리, SIGKILL, 전원 차단 순간에는 명령 전송을 보장할 수 없습니다. 전송 timeout 이후에는 실패한 핸들을 재사용하지 않습니다. `hid:restore`는 수동 복구 경로입니다. 기본 대기화면은 Show Logo이며 커스텀 스크린세이버를 복구하는 명령은 아닙니다.
 

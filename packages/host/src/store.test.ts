@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SignalStore } from './store';
+import { AlreadyRunningError, SignalStore } from './store';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -52,10 +52,18 @@ test('only one host may own a persistent store, and close releases ownership', (
   const path = join(dir, 'state.sqlite');
   const first = new SignalStore(path);
   let unexpected: SignalStore | undefined;
-  try { expect(() => { unexpected = new SignalStore(path); }).toThrow(); }
+  try { expect(() => { unexpected = new SignalStore(path); }).toThrow(AlreadyRunningError); }
   finally { unexpected?.close(); first.close(); }
   const reopened = new SignalStore(path);
   reopened.close();
+});
+
+test('unrelated SQLite open failures are not reported as another running host',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'streamhub-store-error-'));dirs.push(dir);
+  let error:unknown;
+  try{new SignalStore(join(dir,'missing','state.sqlite'));}catch(caught){error=caught;}
+  expect(error).toBeDefined();
+  expect(error).not.toBeInstanceOf(AlreadyRunningError);
 });
 
 test('device layout is durable independently of signal state',()=>{

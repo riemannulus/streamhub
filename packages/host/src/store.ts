@@ -1,6 +1,19 @@
 import { Database } from 'bun:sqlite';
 import { applyCommand, initialState, type CoreCommand, type CoreState } from '../../core/src/index';
 
+export class AlreadyRunningError extends Error {
+  constructor(readonly path: string, cause: unknown) {
+    super('Another host owns this database', { cause });
+    this.name = 'AlreadyRunningError';
+  }
+}
+
+function isOwnershipConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' && /^(SQLITE_BUSY|SQLITE_LOCKED)(_|$)/.test(code);
+}
+
 /** Single-process durable host. Core remains independent of SQLite and Bun. */
 export class SignalStore {
   private readonly db: Database;
@@ -9,7 +22,11 @@ export class SignalStore {
     if (path !== ':memory:') {
       this.owner = new Database(`${path}.owner`, { create: true });
       try { this.owner.exec('BEGIN EXCLUSIVE'); }
-      catch { this.owner.close(); throw new Error('Another host owns this database'); }
+      catch (error) {
+        this.owner.close();
+        if (isOwnershipConflict(error)) throw new AlreadyRunningError(path, error);
+        throw error;
+      }
     }
     try { this.db = new Database(path, { create: true, strict: true }); }
     catch (error) { this.owner?.close(); throw error; }
@@ -46,5 +63,5 @@ export class SignalStore {
   setViewState(name:string,value:unknown):void {
     this.db.query('INSERT INTO view_state (name,body) VALUES (?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body').run(name,JSON.stringify(value));
   }
-  close() { this.db.close(); this.owner?.close(); }
+  close() { try { this.db.close(); } finally { this.owner?.close(); } }
 }
