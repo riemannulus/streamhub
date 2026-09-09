@@ -1,0 +1,117 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
+import { readConfig, updateConfig, validateConfig, type Config } from '../host/src/config';
+import { type PageConfig } from '../streamdeck/pages';
+import { SimulatorSession } from './simulator';
+
+const LIMIT = 256 * 1024;
+const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
+const version = (config: Config) => createHash('sha256').update(JSON.stringify(config)).digest('hex');
+function boardOf(config: Config): PageConfig {
+  return config.streamdeck?.board ?? {
+    defaultPage: 'home', transition: 'fade', durationMs: 250,
+    pages: [
+      { id: 'home', title: 'Home', signals: {}, buttons: [{index: 12, type: 'page', pageId: 'terminal', label: 'Terminal'}, {index: 13, type: 'auto', label: 'Auto'}] },
+      { id: 'terminal', title: 'Terminal', match: {appBundleId: 'com.apple.Terminal'}, signals: Object.keys(config.sources).length ? {source: Object.keys(config.sources)[0]} : {}, buttons: [{index: 13, type: 'auto', label: 'Auto'}, {index: 12, type: 'page', pageId: 'home', label: 'Home'}] },
+    ],
+  };
+}
+class Conflict extends Error {}
+type Client = {session?: SimulatorSession};
+
+/** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
+export function startEditorServer(options: {port?: number; assetsDir?: string} = {}) {
+  readConfig(true);
+  const token = randomBytes(32).toString('hex');
+  const assets = resolve(options.assetsDir ?? '.streamhub/editor');
+  const clients = new Set<Bun.ServerWebSocket<Client>>();
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
+  const headers = {
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+  };
+  const json = (value: unknown, status = 200) => Response.json(value, {status, headers});
+  const server = Bun.serve<Client>({
+    hostname: '127.0.0.1', port: options.port ?? 31416, maxRequestBodySize: LIMIT,
+    async fetch(request, server) {
+      const origin = `http://127.0.0.1:${server.port}`;
+      const url = new URL(request.url);
+      if (request.headers.get('host') !== `127.0.0.1:${server.port}`) return json({error:'Forbidden'}, 403);
+      if (request.headers.has('origin') && request.headers.get('origin') !== origin) return json({error:'Forbidden'}, 403);
+      if (url.pathname.startsWith('/api/') && request.headers.get('sec-fetch-site') === 'cross-site') return json({error:'Forbidden'}, 403);
+      if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
+        try { const config = readConfig(); return json({token, board: boardOf(config), sources: Object.keys(config.sources), version: version(config)}); }
+        catch { return json({error:'Could not read configuration'}, 500); }
+      }
+      if (url.pathname === '/api/simulator') {
+        const protocols = request.headers.get('sec-websocket-protocol')?.split(',').map(value => value.trim()) ?? [];
+        if (request.method !== 'GET' || request.headers.get('origin') !== origin || protocols.length !== 2 || protocols[0] !== 'streamhub' || protocols[1] !== token) return json({error:'Forbidden'},403);
+        if (server.upgrade(request, {data: {}, headers: {...headers, 'Sec-WebSocket-Protocol':'streamhub'}})) return;
+        return json({error:'WebSocket upgrade required'},400);
+      }
+      if (url.pathname.startsWith('/api/')) {
+        if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
+        if (url.pathname === '/api/config' && request.method === 'POST') {
+          if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return json({error:'JSON required'},415);
+          try {
+            const raw = await request.text();
+            if (Buffer.byteLength(raw) > LIMIT) return json({error:'Request too large'},413);
+            const payload = JSON.parse(raw);
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload) || typeof payload.version !== 'string' || !payload.board || Object.keys(payload).some(key => !['version','board'].includes(key))) return json({error:'Invalid configuration request'},400);
+            const saved = updateConfig(current => {
+              if (version(current) !== payload.version) throw new Conflict();
+              return validateConfig({...current, streamdeck: {...current.streamdeck, enabled: current.streamdeck?.enabled ?? false, board: payload.board}});
+            });
+            return json({board: boardOf(saved), version: version(saved)});
+          } catch (error) {
+            return error instanceof Conflict ? json({error:'Configuration changed. Reload before saving.'},409) : json({error:'Configuration could not be saved. Check the page settings.'},400);
+          }
+        }
+        return json({error:'Not found'},404);
+      }
+      if (request.method !== 'GET') return json({error:'Not found'},404);
+      const filename = ASSETS.get(url.pathname);
+      if (!filename) return json({error:'Not found'},404);
+      const file = Bun.file(resolve(assets,filename));
+      if (!(await file.exists())) return json({error:'Editor assets are missing. Run bun run editor.'},503);
+      return new Response(file,{headers});
+    },
+    websocket: {
+      maxPayloadLength: LIMIT,
+      open(socket) {
+        if (stopped) { socket.close(); return; }
+        clients.add(socket);
+        try {
+          const config = readConfig();
+          socket.data.session = new SimulatorSession(boardOf(config), Object.keys(config.sources), event => {
+            if (socket.readyState === 1) socket.send(JSON.stringify(event));
+          });
+        } catch { socket.send(JSON.stringify({type:'error',message:'Could not start simulator'})); socket.close(1011); }
+      },
+      async message(socket, message) {
+        try {
+          if (typeof message !== 'string') throw new Error();
+          await socket.data.session?.command(JSON.parse(message));
+        } catch { socket.send(JSON.stringify({type:'error',message:'Invalid simulator command'})); }
+      },
+      close(socket) { clients.delete(socket); void socket.data.session?.stop(); },
+    },
+  });
+  return {
+    url: `http://127.0.0.1:${server.port}`,
+    stop(): Promise<void> {
+      if (stopping) return stopping;
+      stopped = true;
+      stopping = (async () => {
+      const pending = [...clients].map(socket => { socket.close(1001,'Editor stopped'); return socket.data.session?.stop(); });
+      clients.clear();
+      await Promise.allSettled(pending);
+      await server.stop(true);
+      })();
+      return stopping;
+    },
+  };
+}
