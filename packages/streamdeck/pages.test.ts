@@ -135,3 +135,18 @@ test('changing content capacity preserves saved slots and clamps only the inner 
     {...saved.pages.home!,slots:[{source:3,id:'x'}]},
   ])expect(()=>new PageBoard(changed,{...saved,pages:{home:corrupt}} as typeof saved)).toThrow();
 });
+
+test('builtin button styles survive validation and project onto every tile type',()=>{
+  const config:PageConfig={defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[
+    {index:0,type:'text',label:'Text',color:'#12abEF',icon:'folder'},
+    {index:1,type:'page',pageId:'home',color:'#123456',icon:'terminal'},
+    {index:2,type:'auto',color:'#abcdef',icon:'check'},
+  ]}]};
+  const board=new PageBoard(validatePageConfig(config));
+  expect(board.page().keys[0]).toMatchObject({color:'#12abEF',icon:'folder'});
+  expect(board.page().keys[1]).toMatchObject({color:'#123456',icon:'terminal'});
+  expect(board.page().keys[2]).toMatchObject({color:'#abcdef',icon:'check'});
+  for(const style of [{color:'red'},{color:'#123'},{color:'#123456\"/>'},{icon:'<svg>'},{icon:'toString'},{icon:23}]){
+    expect(()=>validatePageConfig({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'text',label:'Text',...style}]}]})).toThrow();
+  }
+});

@@ -1,9 +1,12 @@
 import {CONTENT_KEYS,SessionDeck,type DeckKey,type DeckLayout,type DeckPage,type PressIntent,type SessionRecord} from './index';
 
-export type PageButton =
+export const BUILTIN_ICONS=['terminal','folder','check','alert','play','link'] as const;
+export type BuiltinIcon=typeof BUILTIN_ICONS[number];
+export type ButtonStyle={color?:string;icon?:BuiltinIcon};
+export type PageButton = ButtonStyle & (
   | {index:number;type:'page';pageId:string;label?:string}
   | {index:number;type:'auto';label?:string}
-  | {index:number;type:'text';label:string};
+  | {index:number;type:'text';label:string});
 export type PageDefinition = {id:string;title:string;match?:{appBundleId:string};signals?:{source?:string};buttons?:PageButton[]};
 export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:'none'|'fade';durationMs?:number};
 export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>};
@@ -46,13 +49,16 @@ export function validatePageConfig(raw:unknown):PageConfig{
       page.buttons=value.buttons.map(rawButton=>{
         const button=object(rawButton);
         if(button.type!=='page'&&button.type!=='auto'&&button.type!=='text')throw new Error('Invalid page button type');
-        exact(button,button.type==='page'?['index','type','pageId','label']:['index','type','label']);
+        exact(button,button.type==='page'?['index','type','pageId','label','color','icon']:['index','type','label','color','icon']);
         if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||positions.has(button.index as number))throw new Error('Invalid or duplicate button index');
         const index=button.index as number;positions.add(index);
         const label=button.label===undefined?undefined:text(button.label,80);
-        if(button.type==='text')return{index,type:'text',label:text(button.label,80)};
-        if(button.type==='page')return{index,type:'page',pageId:id(button.pageId),...(label===undefined?{}:{label})};
-        return{index,type:'auto',...(label===undefined?{}:{label})};
+        const style:ButtonStyle={};
+        if(button.color!==undefined){if(typeof button.color!=='string'||!/^#[0-9a-f]{6}$/i.test(button.color))throw new Error('Invalid button color');style.color=button.color;}
+        if(button.icon!==undefined){if(typeof button.icon!=='string'||!BUILTIN_ICONS.includes(button.icon as BuiltinIcon))throw new Error('Invalid builtin icon');style.icon=button.icon as BuiltinIcon;}
+        if(button.type==='text')return{index,type:'text',label:text(button.label,80),...style};
+        if(button.type==='page')return{index,type:'page',pageId:id(button.pageId),...style,...(label===undefined?{}:{label})};
+        return{index,type:'auto',...style,...(label===undefined?{}:{label})};
       });
     }
     if(page.signals && CONTENT_KEYS.every(index=>page.buttons?.some(button=>button.index===index)))throw new Error('Signals page needs an available content key');
@@ -132,6 +138,8 @@ export class PageBoard{
       if(button.type==='page')key={type:'tile',index:button.index,label:button.label??this.config.pages.find(page=>page.id===button.pageId)!.title,color:'#62a9ff',enabled:true};
       else if(button.type==='auto')key={type:'tile',index:button.index,label:button.label??'자동',foot:this.manual?'수동 고정':'자동 모드',color:'#76c8a1',enabled:true};
       else key={type:'tile',index:button.index,label:button.label,enabled:false};
+      if(button.color!==undefined)key.color=button.color;
+      if(button.icon!==undefined)key.icon=button.icon;
       frame.keys[button.index]=key;
     }
     return{...frame,epoch:this.epoch,viewId:this.current,transition:{type:this.config.transition??'fade',durationMs:this.config.durationMs??250}};

@@ -1,3 +1,4 @@
+import type { BuiltinIcon } from './pages';
 export type SignalKey = { source: string; id: string };
 export type Effect = { type: 'action'; name: string; args: Record<string, string> } | { type: 'open'; url: string };
 export type SessionRecord = SignalKey & {
@@ -6,7 +7,7 @@ export type SessionRecord = SignalKey & {
   freshness: 'fresh' | 'stale';
 };
 export type DeckKey =
-  | { type: 'tile'; index: number; label: string; subtitle?: string; foot?: string; color?: string; enabled?: boolean }
+  | { type: 'tile'; index: number; label: string; subtitle?: string; foot?: string; color?: string; icon?: BuiltinIcon; enabled?: boolean }
   | { type: 'empty'; index: number }
   | { type: 'signal'; index: number; record: SessionRecord }
   | { type: 'previous' | 'next'; index: number; enabled: boolean; urgentCount: number }

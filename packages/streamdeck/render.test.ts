@@ -31,3 +31,17 @@ test('configured tiles escape text and reject markup in their color',async()=>{
   expect(bytes.length).toBe(72*72*3);
   expect([...bytes.subarray((3*72+36)*3,(3*72+36)*3+3)]).toEqual([66,96,135]);
 });
+
+test('builtin icons change real pixels while preserving labels and selected color',async()=>{
+  const page=new SessionDeck().page();
+  const plain={type:'tile' as const,index:0,label:'작업 실행',enabled:false,color:'#123456'};
+  const base=await renderKey(plain,page);
+  expect([...base.subarray((3*72+36)*3,(3*72+36)*3+3)]).toEqual([18,52,86]);
+  const outputs:Buffer[]=[];
+  for(const icon of ['terminal','folder','check','alert','play','link'] as const){
+    const bytes=await renderKey({...plain,icon},page);outputs.push(bytes);
+    expect(bytes.equals(base)).toBe(false);
+    expect(bytes.subarray(30*72*3).equals(base.subarray(30*72*3))).toBe(true);
+  }
+  expect(new Set(outputs.map(bytes=>bytes.toString('base64'))).size).toBe(6);
+});
