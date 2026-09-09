@@ -1,3 +1,4 @@
+import {validateButtonActions} from './key-actions';
 import { randomUUID } from 'node:crypto';
 import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -62,6 +63,7 @@ export function validateConfig(input: unknown): Config {
     new ActionRegistry({ collect: { exec: collector.exec, args: {}, sources: [collector.source], timeoutMs: collector.timeoutMs as number | undefined, maxOutputBytes: 1048576 } });
     collected.add(collector.source);
   }
+  if (config.streamdeck && (config.streamdeck as Config['streamdeck'])?.board) validateButtonActions((config.streamdeck as NonNullable<Config['streamdeck']>).board!, config.actions as Config['actions']);
   return config as Config;
 }
 

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { SessionDeck, type DeckLayout } from '../../streamdeck';
+import { SessionDeck, type DeckLayout, type ButtonEffect } from '../../streamdeck';
 import { DisplayLifecycle, type DisplayDevice } from '../../streamdeck/lifecycle';
 import { openHidDisplay } from '../../streamdeck/hid';
 import { startSessionMonitor, type SessionState } from './session-monitor';
@@ -11,6 +11,7 @@ type DisplayOptions={
   connect?:(onKey:(index:number,edge:'down'|'up')=>void,onError:(error:unknown)=>void)=>Promise<DisplayDevice>;
   monitor?:(callback:(state:SessionState)=>void)=>Promise<{stop():Promise<void>}>;
   pollMs?:number;
+  execute?:(effect:ButtonEffect,signal?:AbortSignal)=>Promise<void>;
   signal?:AbortSignal;
   board?:PageConfig;
   context?:(callback:(value:ApplicationContext)=>void)=>Promise<{stop():Promise<void>}>;
@@ -34,6 +35,24 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
   let rejectStartup:((error:unknown)=>void)|undefined;
   const onError=(error:unknown)=>{lastError=String(error);deck.cancelInput();console.error('[display]',lastError);};
   let lifecycle:DisplayLifecycle;
+  const actionJobs=new Set<Promise<void>>();
+  const actionControllers=new Set<AbortController>();
+  function cancelActions(){for(const controller of actionControllers)controller.abort();}
+  function executeButton(intent:{pageId:string;index:number;effect:ButtonEffect}){
+    const owner=board;if(!owner)return;
+    const controller=new AbortController();actionControllers.add(controller);
+    refresh();
+    const job=Promise.resolve().then(()=>{
+      if(stopped||board!==owner||controller.signal.aborted||!session.active||!dataHealthy)throw new Error('Button action cancelled');
+      if(!options.execute)throw new Error('Button execution is unavailable');
+      return options.execute(intent.effect,controller.signal);
+    }).then(()=>{
+      if(!stopped&&board===owner&&!controller.signal.aborted){owner.setActionStatus(intent.pageId,intent.index,'success');refresh();}
+    },()=>{
+      if(!stopped&&board===owner&&!controller.signal.aborted){console.error('[display] Button action failed');owner.setActionStatus(intent.pageId,intent.index,'error','실행 실패');refresh();}
+    }).finally(()=>{actionJobs.delete(job);actionControllers.delete(controller);});
+    actionJobs.add(job);
+  }
   const key=(index:number,edge:'down'|'up')=>{
     if(!lifecycle.noteKey(index,edge)){
       if(edge==='up')deck.cancelInput(index);
@@ -42,8 +61,9 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
     if(edge==='down')deck.down(index);
     else {
       const intent=deck.up(index);
-      // Focus/open/approval remain disabled until target validation is implemented.
+      // Signal-provided focus/open effects remain disabled; only fixed configured buttons execute.
       if(intent?.type==='navigate')refresh();
+      else if(intent?.type==='button-effect')executeButton(intent);
     }
   };
   lifecycle=new DisplayLifecycle(()=> {
@@ -74,13 +94,18 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
   }
   function stop():Promise<void>{
     if(stopping)return stopping;
-    stopped=true;clearInterval(tick);clearInterval(retry);deck.cancelInput();
+    stopped=true;clearInterval(tick);clearInterval(retry);deck.cancelInput();cancelActions();
     options.signal?.removeEventListener('abort',abort);
     const stopMonitor=async()=>{
       if(monitorStarting){try{monitor=await monitorStarting;}catch{}}
       await monitor?.stop();
     };
-    stopping=Promise.allSettled([lifecycle.stop(),stopMonitor()]).then(results=>{
+    const stopActions=async()=>{
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      try{await Promise.race([Promise.allSettled([...actionJobs]),new Promise<void>(resolve=>{timer=setTimeout(resolve,1000);})]);}
+      finally{clearTimeout(timer);}
+    };
+    stopping=Promise.allSettled([lifecycle.stop(),stopMonitor(),stopActions()]).then(results=>{
       const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);
       if(errors.length)throw new AggregateError(errors,'Display cleanup failed');
     });
@@ -135,7 +160,7 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
     const current=selectedPage??(next.pages.some(page=>page.id===layout.currentPage)?layout.currentPage:next.defaultPage);
     if(!next.pages.some(page=>page.id===current))throw new Error(`Unknown page: ${current}`);
     const replacement=new PageBoard(next,{...layout,currentPage:current,manual:manual??(selectedPage!==undefined?true:layout.manual)});
-    deck.cancelInput();config=next;board=replacement;deck=replacement;lastFrame='';refresh();
+    deck.cancelInput();cancelActions();config=next;board=replacement;deck=replacement;lastFrame='';refresh();
   }
   return {
     applyDraft:(input:PageConfig,selectedPage?:string)=>replaceBoard(input,selectedPage),

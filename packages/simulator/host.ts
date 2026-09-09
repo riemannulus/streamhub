@@ -11,9 +11,10 @@ import type { SessionState } from '../host/src/session-monitor';
 import type { ApplicationContext } from '../host/src/app-context';
 import { HidDisplay } from '../streamdeck/hid';
 import { validatePageConfig, type PageConfig } from '../streamdeck/pages';
-import type { DeckPage, SessionRecord } from '../streamdeck';
+import type { ButtonEffect, DeckPage, SessionRecord } from '../streamdeck';
 
 type EventBody =
+  | {type:'effect';effect:ButtonEffect;status:'running'|'success'|'error';message?:string}
   | {type:'key';index:number;rgb:Buffer}
   | {type:'frame'|'standby'|'connect'|'close'|'restart'}
   | {type:'write-begin'|'write-end';frame:DeckPage;aborted:boolean}
@@ -32,7 +33,7 @@ export type SimulationHost={
   state():Promise<SimulationState>;key(index:number,edge:'down'|'up'):void;
   setSession(active:boolean):void;setContext(appBundleId:string|null,available?:boolean,details?:{windowTitle?:string|null;displayId?:string|null}):void;
   applyDraft(board:PageConfig,selectedPage?:string):Promise<void>;selectPage(pageId:string):Promise<void>;auto():Promise<void>;
-  setLatency(ms:number):void;replaceSignals(records:SimulationSignal[]):Promise<void>;
+  setActionResult(result:'success'|'error'):void;setLatency(ms:number):void;replaceSignals(records:SimulationSignal[]):Promise<void>;
   snapshot():SimulationSnapshot;restart():Promise<void>;stop():Promise<void>;
 };
 export const defaultSimulationBoard:PageConfig={defaultPage:'home',transition:'fade',durationMs:250,pages:[
@@ -51,7 +52,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
     return result;
   };
   let board=validateBoard(options.board??defaultSimulationBoard);
-  let latency=options.latencyMs??0;
+  let latency=options.latencyMs??0,actionResult:'success'|'error'='success';
   const pollMs=options.pollMs??100;
   if(!Number.isFinite(latency)||latency<0||latency>100)throw new Error('Latency must be between 0 and 100 ms');
   if(!Number.isInteger(pollMs)||pollMs<1||pollMs>1000)throw new Error('Invalid simulator poll interval');
@@ -71,10 +72,12 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
     // A broken artifact consumer must not affect transport or lifecycle behavior.
     try{options.onEvent?.(event);}catch{}
   }
+  function mockActions(){const definitions:Record<string,{exec:string[];args:Record<string,string>;sources:string[]}>=Object.create(null);for(const page of board.pages)for(const button of page.buttons??[])if(button.type==='action'){const names=Object.keys(button.args);definitions[button.name]={exec:['/usr/bin/true',...names.map(name=>`{${name}}`)],args:Object.fromEntries(names.map(name=>[name,'.*'])),sources:sourceNames};}return definitions;}
   async function boot(){
-    runtime=await startHost({port:31415,adminToken,sources,streamdeck:{enabled:true,board}},directory,{
+    runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),streamdeck:{enabled:true,board}},directory,{
       dependencies:{serve:options=>startServer({...options,port:0}),display:async(store,path,displayOptions)=>display=await startDisplay(store,path,{
         ...displayOptions,pollMs,
+        execute:async(effect,signal)=>{const result=actionResult;emit({type:'effect',effect,status:'running'});await new Promise<void>((resolve,reject)=>{if(signal?.aborted){reject(new Error('Cancelled'));return;}const abort=()=>{clearTimeout(timer);reject(new Error('Cancelled'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},100);signal?.addEventListener('abort',abort,{once:true});});emit({type:'effect',effect,status:result,...(result==='error'?{message:'모의 실행 실패'}:{})});if(result==='error')throw new Error('모의 실행 실패');},
         monitor:async callback=>{sessionCallback=callback;callback({...session});return{stop:async()=>{if(sessionCallback===callback)sessionCallback=undefined;}};},
         context:async callback=>{contextCallback=callback;callback({...context});return{stop:async()=>{if(contextCallback===callback)contextCallback=undefined;}};},
         connect:async onKey=>{
@@ -118,6 +121,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
     async applyDraft(input,selectedPage){running();const next=validateBoard(input);display!.applyDraft(next,selectedPage);board=next;},
     async selectPage(pageId){running();display!.selectPage(pageId);},
     async auto(){running();display!.auto();},
+    setActionResult(result){if(result!=='success'&&result!=='error')throw new Error('Invalid action result');actionResult=result;},
     setLatency(ms){running();if(!Number.isFinite(ms)||ms<0||ms>100)throw new Error('Latency must be between 0 and 100 ms');latency=ms;},
     async replaceSignals(records){
       running();if(!Array.isArray(records)||records.length>256)throw new Error('Expected at most 256 simulation records');

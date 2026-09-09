@@ -13,8 +13,10 @@ export type DeckKey =
   | { type: 'previous' | 'next'; index: number; enabled: boolean; urgentCount: number }
   | { type: 'pin'; index: number; record?: SessionRecord; hiddenCount: number };
 export type DeckPage = { index: number; pageCount: number; epoch: number; keys: DeckKey[]; viewId?: string; transition?: { type: 'none' | 'fade'; durationMs: number } };
+export type ButtonEffect={type:'open';url:string}|{type:'app';bundleId:string}|{type:'action';name:string;args:Record<string,string>};
 export type PressIntent = { type: 'effect'; key: SignalKey; revision: number; effect: Effect }
-  | { type: 'navigate'; page: number; highlight?: SignalKey };
+  | { type: 'navigate'; page: number; highlight?: SignalKey }
+  | {type:'button-effect';pageId:string;index:number;effect:ButtonEffect};
 export type DeckLayout = { version: 1; slots: (SignalKey | null)[]; currentPage: number };
 export const CONTENT_KEYS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12] as const;
 const keyOf = (key: SignalKey) => JSON.stringify([key.source, key.id]);

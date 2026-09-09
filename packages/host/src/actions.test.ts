@@ -35,3 +35,12 @@ test('timeout also stops descendants holding inherited output pipes', async () =
   await expect(registry.run('a', {type:'action', name:'descendants', args:{}})).rejects.toThrow('timed out');
   expect(performance.now() - start).toBeLessThan(1000);
 });
+
+test('cancellation terminates active process groups and pre-aborted actions never start',async()=>{
+  const registry=new ActionRegistry({wait:{exec:[process.execPath,'-e','setTimeout(()=>{},30000)'],args:{},sources:['a'],timeoutMs:5000}});
+  const controller=new AbortController();
+  const result=registry.run('a',{type:'action',name:'wait',args:{}},controller.signal).catch(error=>error);
+  await Bun.sleep(20);const started=performance.now();controller.abort();
+  expect((await result).message).toContain('cancelled');expect(performance.now()-started).toBeLessThan(1000);
+  await expect(registry.run('a',{type:'action',name:'wait',args:{}},controller.signal)).rejects.toThrow('cancelled');
+});

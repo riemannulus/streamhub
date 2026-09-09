@@ -171,3 +171,23 @@ test('window and monitor rules use priority, stable ties and unknown context ret
   for(const match of [{},{windowTitle:{mode:'regex',value:'.*'}},{windowTitle:{mode:'equals',value:''}},{displayId:4}])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',match}]})).toThrow();
   for(const priority of [1.5,1001,-1001,'high'])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',priority}]})).toThrow();
 });
+
+test('action buttons emit one safe intent and remain gated while running',()=>{
+  const cfg:PageConfig={defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[
+    {index:0,type:'open',url:'https://example.com',label:'Open'},
+    {index:1,type:'app',bundleId:'com.apple.Terminal'},
+    {index:2,type:'action',name:'build',args:{target:'test'}},
+  ]}]};
+  const board=new PageBoard(cfg);
+  expect(click(board,0)).toMatchObject({type:'button-effect',pageId:'home',index:0,effect:{type:'open',url:'https://example.com/'}});
+  expect(board.up(0)).toBeUndefined();expect(click(board,0)).toBeUndefined();
+  expect(board.page().keys[0]).toMatchObject({foot:'실행 중',enabled:false});
+  board.setActionStatus('home',0,'success');
+  expect(board.page().keys[0]).toMatchObject({foot:'완료',enabled:true});
+  expect(click(board,0)?.type).toBe('button-effect');
+  board.down(1);board.cancelInput();expect(board.up(1)).toBeUndefined();
+  expect(click(board,1)).toMatchObject({effect:{type:'app',bundleId:'com.apple.Terminal'}});
+  expect(click(board,2)).toMatchObject({effect:{type:'action',name:'build',args:{target:'test'}}});
+  board.setActionStatus('home',2,'error','실행 실패');expect(board.page().keys[2]).toMatchObject({foot:'실행 실패'});
+  for(const button of [{type:'open',url:'file:///tmp/x'},{type:'open',url:'https://user:pass@example.com'},{type:'app',bundleId:'x;rm'},{type:'action',name:'build',args:{x:1}},{type:'action',name:'build',args:{},exec:['sh']}])expect(()=>validatePageConfig({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,...button}]}]})).toThrow();
+});

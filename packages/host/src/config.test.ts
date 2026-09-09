@@ -87,3 +87,12 @@ test('registration CLI creates configuration and safely repeats using shared upd
   await run();
   expect(readConfig().streamdeck?.board?.transition).toBe('fade');
 });
+
+test('fixed action buttons validate registered names and arguments before startup',()=>{
+  const config={...valid(),actions:{build:{exec:['/usr/bin/true','{target}'],args:{target:'[a-z]+'},sources:['demo']}},streamdeck:{enabled:true,board:{defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'action' as const,label:'Build',name:'build',args:{target:'main'}}]}]}}};
+  expect(()=>validateConfig(config)).not.toThrow();
+  expect(()=>validateConfig({...config,actions:{}})).toThrow();
+  const invalid=structuredClone(config);invalid.streamdeck.board.pages[0].buttons[0].args.target='bad;value';
+  expect(()=>validateConfig(invalid)).toThrow();
+  expect(config.actions.build.sources).toEqual(['demo']);
+});

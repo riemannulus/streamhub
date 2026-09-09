@@ -53,7 +53,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
         return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
       }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
-        try { const config = readConfig(); return json({token, board: boardOf(config), sources: Object.keys(config.sources), version: version(config)}); }
+        try { const config = readConfig(); return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config)}); }
         catch { return json({error:'Could not read configuration'}, 500); }
       }
       if (url.pathname === '/api/simulator') {

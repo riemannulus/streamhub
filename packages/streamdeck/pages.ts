@@ -6,7 +6,10 @@ export type ButtonStyle={color?:string;icon?:BuiltinIcon};
 export type PageButton = ButtonStyle & (
   | {index:number;type:'page';pageId:string;label?:string}
   | {index:number;type:'auto';label?:string}
-  | {index:number;type:'text';label:string});
+  | {index:number;type:'text';label:string}
+  | {index:number;type:'open';url:string;label?:string}
+  | {index:number;type:'app';bundleId:string;label?:string}
+  | {index:number;type:'action';name:string;args:Record<string,string>;label?:string});
 export type PageDefinition = {id:string;title:string;match?:{appBundleId?:string;windowTitle?:{mode:'equals'|'contains';value:string};displayId?:string};priority?:number;signals?:{source?:string};buttons?:PageButton[]};
 export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:'none'|'fade';durationMs?:number};
 export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>};
@@ -52,14 +55,18 @@ export function validatePageConfig(raw:unknown):PageConfig{
       const positions=new Set<number>();
       page.buttons=value.buttons.map(rawButton=>{
         const button=object(rawButton);
-        if(button.type!=='page'&&button.type!=='auto'&&button.type!=='text')throw new Error('Invalid page button type');
-        exact(button,button.type==='page'?['index','type','pageId','label','color','icon']:['index','type','label','color','icon']);
+        if(!['page','auto','text','open','app','action'].includes(button.type as string))throw new Error('Invalid page button type');
+        exact(button,['index','type','label','color','icon',...(button.type==='page'?['pageId']:button.type==='open'?['url']:button.type==='app'?['bundleId']:button.type==='action'?['name','args']:[])]);
         if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||positions.has(button.index as number))throw new Error('Invalid or duplicate button index');
         const index=button.index as number;positions.add(index);
         const label=button.label===undefined?undefined:text(button.label,80);
         const style:ButtonStyle={};
         if(button.color!==undefined){if(typeof button.color!=='string'||!/^#[0-9a-f]{6}$/i.test(button.color))throw new Error('Invalid button color');style.color=button.color;}
         if(button.icon!==undefined){if(typeof button.icon!=='string'||!BUILTIN_ICONS.includes(button.icon as BuiltinIcon))throw new Error('Invalid builtin icon');style.icon=button.icon as BuiltinIcon;}
+        const common={index,...style,...(label===undefined?{}:{label})};
+        if(button.type==='open'){const url=new URL(text(button.url,2048));if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('Invalid button URL');return{...common,type:'open',url:url.href};}
+        if(button.type==='app'){const bundleId=text(button.bundleId,255);if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(bundleId))throw new Error('Invalid app bundle ID');return{...common,type:'app',bundleId};}
+        if(button.type==='action'){const args=object(button.args);if(Object.keys(args).length>32)throw new Error('Too many action arguments');return{...common,type:'action',name:text(button.name,128),args:Object.fromEntries(Object.entries(args).map(([key,value])=>[text(key,128),text(value,512)]))};}
         if(button.type==='text')return{index,type:'text',label:text(button.label,80),...style};
         if(button.type==='page')return{index,type:'page',pageId:id(button.pageId),...style,...(label===undefined?{}:{label})};
         return{index,type:'auto',...style,...(label===undefined?{}:{label})};
@@ -107,6 +114,7 @@ export class PageBoard{
   private candidateSince=0;
   private now=0;
   private reason='문맥 대기';
+  private actionStatus=new Map<string,{status:'running'|'success'|'error';message?:string}>();
   constructor(config:PageConfig,layout?:PageBoardLayout){
     this.config=validatePageConfig(config);
     this.current=this.config.defaultPage;
@@ -161,9 +169,12 @@ export class PageBoard{
       let key:DeckKey;
       if(button.type==='page')key={type:'tile',index:button.index,label:button.label??this.config.pages.find(page=>page.id===button.pageId)!.title,color:'#62a9ff',enabled:true};
       else if(button.type==='auto')key={type:'tile',index:button.index,label:button.label??'자동',foot:this.manual?'수동 고정':'자동 모드',color:'#76c8a1',enabled:true};
-      else key={type:'tile',index:button.index,label:button.label,enabled:false};
+      else if(button.type==='text')key={type:'tile',index:button.index,label:button.label,enabled:false};
+      else key={type:'tile',index:button.index,label:button.label??(button.type==='open'?new URL(button.url).hostname:button.type==='app'?button.bundleId:button.name),enabled:true,color:'#426087'};
       if(button.color!==undefined)key.color=button.color;
       if(button.icon!==undefined)key.icon=button.icon;
+      const status=this.actionStatus.get(JSON.stringify([this.current,button.index]));
+      if(status){key.foot=status.message??(status.status==='running'?'실행 중':status.status==='success'?'완료':'실패');key.enabled=status.status!=='running';key.color=status.status==='running'?'#dba52f':status.status==='success'?'#269d91':'#dc3741';}
       frame.keys[button.index]=key;
     }
     return{...frame,epoch:this.epoch,viewId:this.current,transition:{type:this.config.transition??'fade',durationMs:this.config.durationMs??250}};
@@ -171,6 +182,7 @@ export class PageBoard{
   down(index:number):void{
     if(!Number.isInteger(index)||index<0||index>=15||this.held.has(index))return;
     const frame=this.page();
+    if(this.actionStatus.get(JSON.stringify([this.current,index]))?.status==='running')return;
     this.held.set(index,{epoch:this.blocked?-1:frame.epoch,cell:frame.keys[index]!});
     if(!this.definition.buttons?.some(button=>button.index===index))this.deck.down(index);
   }
@@ -181,11 +193,22 @@ export class PageBoard{
     const button=this.definition.buttons?.find(button=>button.index===index);
     if(button){
       if(button.type==='text')return;
+      if(button.type==='open'||button.type==='app'||button.type==='action'){
+        this.setActionStatus(this.current,index,'running');
+        const effect=button.type==='open'?{type:'open' as const,url:button.url}:button.type==='app'?{type:'app' as const,bundleId:button.bundleId}:{type:'action' as const,name:button.name,args:{...button.args}};
+        return{type:'button-effect',pageId:this.current,index,effect};
+      }
       if(button.type==='page'){this.manual=true;this.select(button.pageId);}
       else{this.manual=false;this.route();}
       return{type:'navigate',page:this.page().index};
     }
     const intent=this.deck.up(index);this.page();return intent;
+  }
+  setActionStatus(pageId:string,index:number,status:'running'|'success'|'error',message?:string):void{
+    const button=this.config.pages.find(page=>page.id===pageId)?.buttons?.find(button=>button.index===index);
+    if(!button||!['open','app','action'].includes(button.type))throw new Error('Unknown action button');
+    if(!['running','success','error'].includes(status))throw new Error('Invalid action status');
+    this.actionStatus.set(JSON.stringify([pageId,index]),{status,...(message?{message:message.slice(0,80)}:{})});
   }
   cancelInput(index?:number):void{
     if(index===undefined)this.held.clear();else this.held.delete(index);

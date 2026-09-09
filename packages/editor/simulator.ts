@@ -2,6 +2,7 @@ import { validatePageConfig, type PageConfig } from '../streamdeck/pages';
 import {startSimulation, type SimulationHost, type SimulationEvent} from '../simulator/host';
 
 export type SimulatorEvent =
+  | {type:'action';status:string;effect:unknown;message?:string}
   | { type:'key'; index:number; rgb:string }
   | { type:'standby' }
   | { type:'state'; pageId:string; manual:boolean; locked:boolean; inputEnabled:boolean; latencyMs:number; frames:number; keysSent:number; lastFrameMs:number; selectionReason?:string }
@@ -58,7 +59,8 @@ export class SimulatorSession {
   }
   private send(event:SimulatorEvent){if(!this.stopped){try{this.emit(event);}catch{}}}
   private event(event:SimulationEvent){
-    if(event.type==='key'){
+    if(event.type==='effect'){this.send({type:'action',status:event.status,effect:event.effect,message:event.message});}
+    else if(event.type==='key'){
       if(event.index===0)this.frameStarted=event.at;
       this.keysSent++;this.send({type:'key',index:event.index,rgb:event.rgb.toString('base64')});
     }else if(event.type==='frame'){
@@ -97,6 +99,7 @@ export class SimulatorSession {
         case 'lock':
           if(typeof command.locked!=='boolean')throw new Error('Invalid lock state');
           this.locked=command.locked;host.setSession(!this.locked);break;
+        case 'action-result':if(command.result!=='success'&&command.result!=='error')throw new Error('Invalid action result');host.setActionResult(command.result);break;
         case 'latency':this.latencyMs=integer(command.ms,0,100);host.setLatency(this.latencyMs);break;
         case 'signals':await host.replaceSignals(sampleSignals(integer(command.count,0,48),this.sources));break;
         case 'key':{

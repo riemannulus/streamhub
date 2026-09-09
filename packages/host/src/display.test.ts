@@ -177,3 +177,44 @@ test('host session suspension returns to standby and resume uses latest stored s
   } finally {await display.stop();store.close();}
   expect(calls).toContain('monitor-stop');
 });
+
+test('fixed button effects run once, render results, and discard late completion after draft replacement',async()=>{
+  const store=new SignalStore(':memory:');let key!:(index:number,edge:'down'|'up')=>void;
+  let frame:DeckPage|undefined,calls=0,finish!:()=>void,signal:AbortSignal|undefined;
+  const board={defaultPage:'home',transition:'none' as const,pages:[{id:'home',title:'Home',buttons:[{index:0,type:'open' as const,label:'Open',url:'https://example.com'}]}]};
+  const display=await startDisplay(store,'/unused',{board,pollMs:5,
+    connect:async callback=>{key=callback;return{write:async value=>{frame=value;},standby:async()=>{},close:async()=>{}};},
+    monitor:async callback=>{callback({active:true,reason:'active'});return{stop:async()=>{}};},
+    execute:async(_effect,abort)=>{calls++;signal=abort;await new Promise<void>(resolve=>{finish=resolve;});},
+  });
+  try{
+    await waitFor(()=>display.status().inputEnabled);key(0,'down');key(0,'up');
+    await waitFor(()=>calls===1&&display.status().inputEnabled);
+    key(0,'down');key(0,'up');await Bun.sleep(10);expect(calls).toBe(1);
+    finish();await waitFor(()=>JSON.stringify(frame).includes('완료'));
+    await waitFor(()=>display.status().inputEnabled);key(0,'down');key(0,'up');await waitFor(()=>calls===2);
+    display.applyDraft({...board,pages:[{id:'home',title:'New',buttons:[{index:0,type:'text',label:'Replacement'}]}]});
+    expect(signal?.aborted).toBe(true);finish();await Bun.sleep(20);
+    expect(JSON.stringify(frame)).toContain('Replacement');expect(JSON.stringify(frame)).not.toContain('완료');
+  }finally{await display.stop();store.close();}
+});
+test('missing executor fails closed and pending execution is aborted on shutdown',async()=>{
+  const store=new SignalStore(':memory:');let key!:(index:number,edge:'down'|'up')=>void;let frame:DeckPage|undefined;
+  const board={defaultPage:'home',transition:'none' as const,pages:[{id:'home',title:'Home',buttons:[{index:0,type:'app' as const,label:'App',bundleId:'com.apple.Terminal'}]}]};
+  const common={board,pollMs:5,connect:async(callback:(index:number,edge:'down'|'up')=>void)=>{key=callback;return{write:async(value:DeckPage)=>{frame=value;},standby:async()=>{},close:async()=>{}};},monitor:async(callback:(state:SessionState)=>void)=>{callback({active:true,reason:'active'});return{stop:async()=>{}};}};
+  const closed=await startDisplay(store,'/unused',common);
+  await waitFor(()=>closed.status().inputEnabled);key(0,'down');key(0,'up');await waitFor(()=>JSON.stringify(frame).includes('실행 실패'));await closed.stop();
+  let aborted=false;
+  const display=await startDisplay(store,'/unused',{...common,execute:async(_effect,signal)=>new Promise<void>(resolve=>{signal!.addEventListener('abort',()=>{aborted=true;resolve();},{once:true});})});
+  await waitFor(()=>display.status().inputEnabled);key(0,'down');key(0,'up');await Bun.sleep(10);await display.stop();expect(aborted).toBe(true);store.close();
+});
+
+test('locking between key release and scheduled execution prevents a new action',async()=>{
+  const store=new SignalStore(':memory:');let key!:(index:number,edge:'down'|'up')=>void,session!:(state:SessionState)=>void,calls=0;
+  const display=await startDisplay(store,'/unused',{board:{defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'open',label:'Open',url:'https://example.com'}]}]},pollMs:5,
+    connect:async callback=>{key=callback;return{write:async()=>{},standby:async()=>{},close:async()=>{}};},
+    monitor:async callback=>{session=callback;callback({active:true,reason:'active'});return{stop:async()=>{}};},execute:async()=>{calls++;},
+  });
+  try{await waitFor(()=>display.status().inputEnabled);key(0,'down');key(0,'up');session({active:false,reason:'locked'});await Bun.sleep(20);expect(calls).toBe(0);}
+  finally{await display.stop();store.close();}
+});

@@ -9,7 +9,8 @@ type Registered = ActionDefinition & { patterns: Map<string, RegExp> };
 /** Trusted local configuration, never supplied by a signal. No shell evaluation. */
 export class ActionRegistry {
   private readonly definitions = new Map<string, Registered>();
-  constructor(definitions: Record<string, ActionDefinition> = {}) {
+  constructor(definitions: Record<string, ActionDefinition> = {}, private readonly options:{maxArgLength?:number}={}) {
+    if(options.maxArgLength!==undefined&&(!Number.isInteger(options.maxArgLength)||options.maxArgLength<1||options.maxArgLength>2048))throw new Error('Invalid argument length limit');
     for (const [name, def] of Object.entries(definitions)) {
       if (!Array.isArray(def.exec) || !def.exec.length || !isAbsolute(def.exec[0])) throw new Error('Action executable must be absolute');
       if (!Array.isArray(def.sources) || !def.sources.every(s => typeof s === 'string')) throw new Error('Action sources are required');
@@ -34,11 +35,12 @@ export class ActionRegistry {
     if (Object.keys(press.args).length !== def.patterns.size) throw new Error('Invalid action arguments');
     for (const [key, pattern] of def.patterns) {
       const value = press.args[key];
-      if (typeof value !== 'string' || value.length > 512 || value.includes('\0') || !pattern.test(value)) throw new Error('Invalid action arguments');
+      if (typeof value !== 'string' || value.length > (this.options.maxArgLength??512) || value.includes('\0') || !pattern.test(value)) throw new Error('Invalid action arguments');
     }
     return def;
   }
-  async run(source: string, press: ActionPress) {
+  async run(source: string, press: ActionPress, signal?: AbortSignal) {
+    if (signal?.aborted) throw new Error('Action cancelled');
     const def = this.validate(source, press);
     const argv = def.exec.map(arg => /^\{([A-Za-z][A-Za-z0-9_]*)\}$/.test(arg) ? press.args[arg.slice(1, -1)] : arg);
     const proc = Bun.spawn(argv, { cwd: def.cwd ?? process.cwd(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...def.env }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', detached: process.platform !== 'win32' });
@@ -48,6 +50,9 @@ export class ActionRegistry {
         else proc.kill('SIGKILL');
       } catch { /* already exited */ }
     };
+    const abort = () => stop();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) stop();
     let timedOut = false;
     let bytes = 0;
     const timer = setTimeout(() => { timedOut = true; stop(); }, def.timeoutMs ?? 3000);
@@ -62,9 +67,10 @@ export class ActionRegistry {
     };
     try {
       const [stdout, stderr, exitCode] = await Promise.all([read(proc.stdout), read(proc.stderr), proc.exited]);
+      if (signal?.aborted) throw new Error('Action cancelled');
       if (timedOut) throw new Error('Action timed out');
       if (exitCode !== 0) throw new Error(`Action failed with exit ${exitCode}`);
       return { stdout, stderr, exitCode };
-    } finally { clearTimeout(timer); stop(); await proc.exited; }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); stop(); await proc.exited; }
   }
 }

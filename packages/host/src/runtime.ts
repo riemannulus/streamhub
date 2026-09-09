@@ -1,3 +1,5 @@
+import {createKeyActionExecutor} from './key-actions';
+import type {ButtonEffect} from '../../streamdeck';
 import { join } from 'node:path';
 import { ActionRegistry } from './actions';
 import { validateConfig, type Config } from './config';
@@ -12,7 +14,7 @@ type HostDisplay = { status(): unknown; stop(): Promise<void> };
 export type HostDependencies = {
   openStore(path: string): SignalStore;
   serve(options: ServerOptions): HostServer;
-  display(store: SignalStore, directory: string, options: { signal: AbortSignal; board?: PageConfig }): Promise<HostDisplay>;
+  display(store: SignalStore, directory: string, options: { signal: AbortSignal; board?: PageConfig; execute:(effect:ButtonEffect,signal?:AbortSignal)=>Promise<void> }): Promise<HostDisplay>;
   collect(collector: Collector): Promise<Membership>;
 };
 export type HostOptions = { signal?: AbortSignal; onError?: (error: unknown) => void; dependencies?: Partial<HostDependencies> };
@@ -106,7 +108,7 @@ export async function startHost(input: Config, directory: string, options: HostO
         const module = await import('./display');
         return module.startDisplay(store, directory, options);
       });
-      pendingDisplay = factory(store, directory, { signal: controller.signal, board: config.streamdeck?.board });
+      pendingDisplay = factory(store, directory, { signal: controller.signal, board: config.streamdeck?.board, execute:createKeyActionExecutor(config.actions) });
       display=await untilAborted(pendingDisplay, controller.signal);
       checkCancelled();
     }

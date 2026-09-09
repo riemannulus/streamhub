@@ -23,6 +23,21 @@ test('real display routes by window and monitor and explains unknown context',as
     await until('default rule',async()=>(await sim.state()).display.pageId==='home');
   }finally{await sim.stop();}
 });
+test('fixed actions only emit simulated effects and paint success or failure',async()=>{
+  const sim=await startSimulation({board:{defaultPage:'tools',transition:'none',pages:[{id:'tools',title:'Tools',buttons:[
+    {index:0,type:'open',url:'https://example.com',label:'Open'},
+    {index:1,type:'action',name:'build',args:{target:'test'},label:'Build'},
+  ]}]}});
+  try{
+    await ready(sim);sim.key(0,'down');sim.key(0,'up');sim.key(0,'down');sim.key(0,'up');
+    await until('mock success',()=>sim.events.some(event=>event.type==='effect'&&event.status==='success'));
+    expect(sim.events.filter(event=>event.type==='effect'&&event.status==='running')).toHaveLength(1);
+    await until('success status displayed',()=>sim.snapshot().frame?.keys.some(key=>key.type==='tile'&&key.index===0&&key.foot==='완료')??false);
+    sim.setActionResult('error');await ready(sim);sim.key(1,'down');sim.key(1,'up');
+    await until('mock error',()=>sim.events.some(event=>event.type==='effect'&&event.status==='error'));
+    expect(sim.events.some(event=>event.type==='effect'&&event.effect.type==='action'&&event.effect.name==='build')).toBe(true);
+  }finally{await sim.stop();}
+});
 test('real HTTP stores signals, survives restart and preserves manual page layout',async()=>{
   const sim=await startSimulation({board:{defaultPage:'home',transition:'none',pages:[
     {id:'home',title:'Home',signals:{},buttons:[{index:12,type:'page',pageId:'terminal'}]},
