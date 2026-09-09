@@ -141,7 +141,7 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
     applyDraft:(input:PageConfig,selectedPage?:string)=>replaceBoard(input,selectedPage),
     selectPage:(pageId:string)=>replaceBoard(config!,pageId,true),
     auto:()=>replaceBoard(config!,undefined,false),
-    status:()=>({session:{...session},inputEnabled:lifecycle.inputEnabled,lastError,...(board?{pageId:board.page().viewId,manual:board.exportLayout().manual,context:{...context}}:{})}),
+    status:()=>({session:{...session},inputEnabled:lifecycle.inputEnabled,lastError,...(board?{pageId:board.page().viewId,selectionReason:board.selectionReason(),manual:board.exportLayout().manual,context:{...context}}:{})}),
     stop,
   };
 }

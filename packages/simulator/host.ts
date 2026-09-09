@@ -21,7 +21,7 @@ type EventBody =
   | {type:'session';active:boolean}
   | {type:'context';appBundleId:string|null;available:boolean};
 export type SimulationEvent=EventBody & {at:number;generation:number};
-export type SimulationState={revision:number;records:SessionRecord[];display:{session:SessionState;inputEnabled:boolean;lastError?:string;pageId?:string;manual?:boolean;context?:ApplicationContext}};
+export type SimulationState={revision:number;records:SessionRecord[];display:{session:SessionState;inputEnabled:boolean;lastError?:string;pageId?:string;manual?:boolean;selectionReason?:string;context?:ApplicationContext}};
 export type SimulationSignal={source?:string;id:string;label:string;level?:'info'|'warn'|'urgent';detail?:string};
 export type SimulationOptions={retainEvents?:boolean;sources?:string[];board?:PageConfig;latencyMs?:number;pollMs?:number;onEvent?:(event:SimulationEvent)=>void};
 export type SimulationSnapshot={standby:boolean;pixels:(Buffer|null)[];generation:number;frame:DeckPage|null};
@@ -30,7 +30,7 @@ export type SimulationHost={
   upsert(signal:{id:string;label:string;level?:'info'|'warn'|'urgent';detail?:string},deliveryId?:string,source?:string):Promise<{revision:number}>;
   remove(id:string,deliveryId?:string,source?:string):Promise<{revision:number}>;
   state():Promise<SimulationState>;key(index:number,edge:'down'|'up'):void;
-  setSession(active:boolean):void;setContext(appBundleId:string|null,available?:boolean):void;
+  setSession(active:boolean):void;setContext(appBundleId:string|null,available?:boolean,details?:{windowTitle?:string|null;displayId?:string|null}):void;
   applyDraft(board:PageConfig,selectedPage?:string):Promise<void>;selectPage(pageId:string):Promise<void>;auto():Promise<void>;
   setLatency(ms:number):void;replaceSignals(records:SimulationSignal[]):Promise<void>;
   snapshot():SimulationSnapshot;restart():Promise<void>;stop():Promise<void>;
@@ -135,7 +135,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
     state:()=>request('/v1/state',adminToken),
     key(index,edge){running();if(!Number.isInteger(index)||index<0||index>14||(edge!=='down'&&edge!=='up'))throw new Error('Invalid key event');emit({type:'input',index,edge});keyCallback?.(index,edge);},
     setSession(active){running();session={active,reason:active?'active':'locked'};emit({type:'session',active});sessionCallback?.({...session});},
-    setContext(appBundleId,available=true){running();context={appBundleId,available};emit({type:'context',...context});contextCallback?.({...context});},
+    setContext(appBundleId,available=true,details={}){running();context={appBundleId,available,...details};emit({type:'context',...context});contextCallback?.({...context});},
     restart(){
       if(restarting)return restarting;running();
       restarting=(async()=>{await runtime!.stop();emit({type:'restart'});if(!stopped)await boot();})().finally(()=>{restarting=undefined;});return restarting;

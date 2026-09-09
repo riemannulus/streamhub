@@ -150,3 +150,24 @@ test('builtin button styles survive validation and project onto every tile type'
     expect(()=>validatePageConfig({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'text',label:'Text',...style}]}]})).toThrow();
   }
 });
+
+test('window and monitor rules use priority, stable ties and unknown context retention',()=>{
+  const cfg:PageConfig={defaultPage:'home',pages:[{id:'home',title:'Home'},
+    {id:'app',title:'App',match:{appBundleId:'test.editor'}},
+    {id:'project',title:'Project',priority:10,match:{appBundleId:'test.editor',windowTitle:{mode:'contains',value:'Streamhub'},displayId:'2'}},
+    {id:'tie',title:'Tie',priority:10,match:{windowTitle:{mode:'equals',value:'Streamhub'},displayId:'2'}},
+  ]};
+  const board=new PageBoard(cfg);
+  const route=(ctx:Parameters<PageBoard['context']>[0],time:number)=>{board.context(ctx,time);board.context(ctx,time+250);};
+  route({available:true,appBundleId:'test.editor',windowTitle:'Streamhub',displayId:'2'},0);
+  expect(board.page().viewId).toBe('project');
+  expect(board.selectionReason()).toContain('Project');
+  route({available:true,appBundleId:'test.editor',windowTitle:null,displayId:'2'},1000);
+  expect(board.page().viewId).toBe('project');expect(board.selectionReason()).toContain('미확인');
+  route({available:true,appBundleId:'test.editor',windowTitle:'Other',displayId:'2'},2000);
+  expect(board.page().viewId).toBe('app');
+  route({available:true,appBundleId:'other.app',windowTitle:null,displayId:'3'},3000);
+  expect(board.page().viewId).toBe('home');
+  for(const match of [{},{windowTitle:{mode:'regex',value:'.*'}},{windowTitle:{mode:'equals',value:''}},{displayId:4}])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',match}]})).toThrow();
+  for(const priority of [1.5,1001,-1001,'high'])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',priority}]})).toThrow();
+});

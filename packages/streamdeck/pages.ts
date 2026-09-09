@@ -7,10 +7,10 @@ export type PageButton = ButtonStyle & (
   | {index:number;type:'page';pageId:string;label?:string}
   | {index:number;type:'auto';label?:string}
   | {index:number;type:'text';label:string});
-export type PageDefinition = {id:string;title:string;match?:{appBundleId:string};signals?:{source?:string};buttons?:PageButton[]};
+export type PageDefinition = {id:string;title:string;match?:{appBundleId?:string;windowTitle?:{mode:'equals'|'contains';value:string};displayId?:string};priority?:number;signals?:{source?:string};buttons?:PageButton[]};
 export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:'none'|'fade';durationMs?:number};
 export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>};
-export type PageContext = {appBundleId:string|null;available:boolean};
+export type PageContext = {appBundleId:string|null;available:boolean;windowTitle?:string|null;displayId?:string|null};
 
 function object(value:unknown):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected page configuration object');
@@ -30,14 +30,18 @@ export function validatePageConfig(raw:unknown):PageConfig{
   if(!Array.isArray(input.pages)||input.pages.length<1||input.pages.length>32)throw new Error('Expected 1–32 pages');
   const seen=new Set<string>();
   const pages:PageDefinition[]=input.pages.map(rawPage=>{
-    const value=object(rawPage);exact(value,['id','title','match','signals','buttons']);
+    const value=object(rawPage);exact(value,['id','title','match','priority','signals','buttons']);
     const page:PageDefinition={id:id(value.id),title:text(value.title,80)};
     if(seen.has(page.id))throw new Error('Duplicate page ID');seen.add(page.id);
+    if(value.priority!==undefined){if(!Number.isInteger(value.priority)||(value.priority as number)<-1000||(value.priority as number)>1000)throw new Error('Invalid rule priority');page.priority=value.priority as number;}
     if(value.match!==undefined){
-      const match=object(value.match);exact(match,['appBundleId']);
-      const appBundleId=text(match.appBundleId,255);
-      if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(appBundleId))throw new Error('Invalid app bundle ID');
-      page.match={appBundleId};
+      const match=object(value.match);exact(match,['appBundleId','windowTitle','displayId']);
+      if(!Object.keys(match).length)throw new Error('Expected a page condition');
+      page.match={};
+      if(match.appBundleId!==undefined){const appBundleId=text(match.appBundleId,255);if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(appBundleId))throw new Error('Invalid app bundle ID');page.match.appBundleId=appBundleId;}
+      if(match.windowTitle!==undefined){const title=object(match.windowTitle);exact(title,['mode','value']);if(title.mode!=='equals'&&title.mode!=='contains')throw new Error('Invalid title condition');page.match.windowTitle={mode:title.mode,value:text(title.value,512)};}
+      if(match.displayId!==undefined)page.match.displayId=text(match.displayId,128);
+      if(!Object.keys(page.match).length)throw new Error('Expected a page condition');
     }
     if(value.signals!==undefined){
       const signals=object(value.signals);exact(signals,['source']);page.signals={};
@@ -72,6 +76,23 @@ export function validatePageConfig(raw:unknown):PageConfig{
   return config;
 }
 
+export type PageSelection={target?:string;reason:string;unknown:boolean};
+/** A known mismatch defeats an unknown field in the same AND rule. */
+export function choosePage(config:PageConfig,context:PageContext):PageSelection{
+  if(!context.available)return{reason:'문맥 미확인 · 현재 페이지 유지',unknown:true};
+  const ranked=config.pages.filter(page=>page.match).map((page,index)=>({page,index})).sort((a,b)=>(b.page.priority??0)-(a.page.priority??0)||a.index-b.index);
+  for(const {page} of ranked){
+    const match=page.match!,conditions:(boolean|undefined)[]=[];
+    if(match.appBundleId!==undefined)conditions.push(context.appBundleId===match.appBundleId);
+    if(match.windowTitle!==undefined)conditions.push(context.windowTitle==null?undefined:match.windowTitle.mode==='equals'?context.windowTitle===match.windowTitle.value:context.windowTitle.includes(match.windowTitle.value));
+    if(match.displayId!==undefined)conditions.push(context.displayId==null?undefined:context.displayId===match.displayId);
+    if(conditions.includes(false))continue;
+    if(conditions.includes(undefined))return{reason:`${page.title}: 문맥 미확인 · 현재 페이지 유지`,unknown:true};
+    return{target:page.id,reason:`${page.title}: 조건 일치 · 우선순위 ${page.priority??0}`,unknown:false};
+  }
+  return{target:config.defaultPage,reason:'일치하는 조건 없음 · 기본 페이지',unknown:false};
+}
+
 /** Outer pages compose independent SessionDecks; context never changes core state. */
 export class PageBoard{
   private readonly config:PageConfig;
@@ -85,6 +106,7 @@ export class PageBoard{
   private candidate:string|undefined;
   private candidateSince=0;
   private now=0;
+  private reason='문맥 대기';
   constructor(config:PageConfig,layout?:PageBoardLayout){
     this.config=validatePageConfig(config);
     this.current=this.config.defaultPage;
@@ -118,11 +140,13 @@ export class PageBoard{
   context(context:PageContext,now:number):void{
     if(!Number.isFinite(now))throw new Error('Invalid context timestamp');
     this.now=now;
-    if(!context.available){this.candidate=undefined;return;}
-    const target=this.config.pages.find(page=>page.match?.appBundleId===context.appBundleId)?.id??this.config.defaultPage;
+    const selection=choosePage(this.config,context);this.reason=selection.reason;
+    if(selection.target===undefined){this.candidate=undefined;return;}
+    const target=selection.target;
     if(target!==this.candidate||now<this.candidateSince){this.candidate=target;this.candidateSince=now;}
     this.route();
   }
+  selectionReason():string{return this.manual?'수동 고정':this.candidate!==undefined&&this.candidate!==this.current&&this.now-this.candidateSince<250?`${this.reason} · 전환 대기`:this.reason;}
   private route(){if(!this.manual&&this.candidate!==undefined&&this.now-this.candidateSince>=250)this.select(this.candidate);}
   private select(pageId:string){
     if(pageId===this.current)return;

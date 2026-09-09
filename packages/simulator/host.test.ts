@@ -1,11 +1,28 @@
 import { expect, test } from 'bun:test';
 import { renderKey } from '../streamdeck/render';
 import { startSimulation, type SimulationHost } from './host';
+import { until } from './scenarios';
 async function ready(sim:SimulationHost,label?:string){
   const end=Date.now()+4000;
   while(Date.now()<end){if((await sim.state()).display.inputEnabled && sim.snapshot().pixels.every(Boolean) && (!label||sim.snapshot().frame?.keys.some(key=>key.type==='signal'&&key.record.label===label)))return;await Bun.sleep(10);}
   throw new Error('Simulator did not become ready');
 }
+test('real display routes by window and monitor and explains unknown context',async()=>{
+  const sim=await startSimulation({board:{defaultPage:'home',transition:'none',pages:[
+    {id:'home',title:'Home'},
+    {id:'project',title:'Project',priority:10,match:{appBundleId:'com.editor',windowTitle:{mode:'contains',value:'streamhub'},displayId:'monitor-a'}},
+  ]}});
+  try{
+    sim.setContext('com.editor',true,{windowTitle:'streamhub — build',displayId:'monitor-a'});
+    await until('project rule',async()=>(await sim.state()).display.pageId==='project');
+    sim.setContext('com.editor',true,{windowTitle:null,displayId:'monitor-a'});
+    await Bun.sleep(350);
+    expect((await sim.state()).display.pageId).toBe('project');
+    expect((await sim.state()).display.selectionReason).toBeTruthy();
+    sim.setContext('com.editor',true,{windowTitle:'another',displayId:'monitor-a'});
+    await until('default rule',async()=>(await sim.state()).display.pageId==='home');
+  }finally{await sim.stop();}
+});
 test('real HTTP stores signals, survives restart and preserves manual page layout',async()=>{
   const sim=await startSimulation({board:{defaultPage:'home',transition:'none',pages:[
     {id:'home',title:'Home',signals:{},buttons:[{index:12,type:'page',pageId:'terminal'}]},

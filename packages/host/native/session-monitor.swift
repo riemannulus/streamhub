@@ -1,4 +1,6 @@
 import AppKit
+import ApplicationServices
+import ColorSync
 import CoreGraphics
 import Foundation
 
@@ -166,7 +168,64 @@ final class SessionMonitor: NSObject {
     }
 }
 
-// App context uses public NSWorkspace APIs only; no Accessibility permission.
+// Window attributes use public Accessibility APIs, only when trust already exists.
+// https://developer.apple.com/documentation/applicationservices/1460720-axisprocesstrusted
+// https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue
+// Display UUIDs are stable identifiers, unlike transient CGDirectDisplayID values.
+// https://developer.apple.com/documentation/colorsync/cgdisplaycreateuuidfromdisplayid(_:)
+func displayForWindow(_ window: CGRect, displays: [(CGDirectDisplayID, CGRect)]) -> CGDirectDisplayID? {
+    guard window.origin.x.isFinite, window.origin.y.isFinite,
+          window.width.isFinite, window.height.isFinite, window.width > 0, window.height > 0 else { return nil }
+    var winner: CGDirectDisplayID?
+    var largest: CGFloat = 0
+    for (id, bounds) in displays {
+        let overlap = window.intersection(bounds)
+        let area = overlap.isNull ? 0 : overlap.width * overlap.height
+        if area > largest { largest = area; winner = id }
+    }
+    return winner
+}
+func copyAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+func focusedWindowContext(_ app: NSRunningApplication) -> (String?, String?) {
+    // AXIsProcessTrusted performs a check; it does not request or grant permission.
+    guard AXIsProcessTrusted() else { return (nil, nil) }
+    let application = AXUIElementCreateApplication(app.processIdentifier)
+    _ = AXUIElementSetMessagingTimeout(application, 0.15)
+    guard let rawWindow = copyAttribute(application, kAXFocusedWindowAttribute),
+          CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else { return (nil, nil) }
+    let window = unsafeBitCast(rawWindow, to: AXUIElement.self)
+    _ = AXUIElementSetMessagingTimeout(window, 0.15)
+    let rawTitle = copyAttribute(window, kAXTitleAttribute) as? String
+    let title = rawTitle.flatMap { $0.utf16.count <= 512 && $0.utf8.count <= 2048 ? $0 : nil }
+    guard let rawPosition = copyAttribute(window, kAXPositionAttribute), CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+          let rawSize = copyAttribute(window, kAXSizeAttribute), CFGetTypeID(rawSize) == AXValueGetTypeID() else { return (title, nil) }
+    let position = unsafeBitCast(rawPosition, to: AXValue.self)
+    let size = unsafeBitCast(rawSize, to: AXValue.self)
+    var point = CGPoint.zero, dimensions = CGSize.zero
+    guard AXValueGetType(position) == .cgPoint, AXValueGetType(size) == .cgSize,
+          AXValueGetValue(position, .cgPoint, &point), AXValueGetValue(size, .cgSize, &dimensions) else { return (title, nil) }
+    var count: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0, count <= 128 else { return (title, nil) }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    guard CGGetActiveDisplayList(count, &ids, &count) == .success,
+          let display = displayForWindow(CGRect(origin: point, size: dimensions), displays: ids.prefix(Int(count)).map { ($0, CGDisplayBounds($0)) }),
+          let uuid = CGDisplayCreateUUIDFromDisplayID(display)?.takeRetainedValue() else { return (title, nil) }
+    return (title, CFUUIDCreateString(nil, uuid) as String)
+}
+func selfTestWindowContext() {
+    let displays: [(CGDirectDisplayID, CGRect)] = [(1, CGRect(x: 0, y: 0, width: 100, height: 100)), (2, CGRect(x: 100, y: 0, width: 100, height: 100))]
+    precondition(displayForWindow(CGRect(x: 80, y: 10, width: 70, height: 50), displays: displays) == 2)
+    precondition(displayForWindow(CGRect(x: 500, y: 0, width: 20, height: 20), displays: displays) == nil)
+    precondition(displayForWindow(CGRect(x: 0, y: 0, width: 0, height: 0), displays: displays) == nil)
+    precondition(displayForWindow(CGRect(x: 75, y: 0, width: 50, height: 50), displays: displays) == 1)
+    print("{\"available\":true,\"appBundleId\":\"com.example.Synthetic\",\"windowTitle\":\"Synthetic window\",\"displayId\":\"00000000-0000-0000-0000-000000000001\"}")
+}
+
+// App identity remains available independently of Accessibility permission.
 // https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication
 // https://developer.apple.com/documentation/appkit/nsworkspace/didactivateapplicationnotification
 final class ApplicationContextMonitor: NSObject {
@@ -181,10 +240,16 @@ final class ApplicationContextMonitor: NSObject {
         let bundle = app?.bundleIdentifier
         let validBundle = bundle == nil || (!bundle!.isEmpty && bundle!.utf8.count <= 512)
         let available = app != nil && validBundle
+        // Never inspect focused windows while the session is locked or display asleep.
+        let canInspectWindow = validConsole && session?["CGSSessionScreenIsLocked"] as? Bool != true
+            && CGDisplayIsAsleep(CGMainDisplayID()) == 0
+        let window = available && canInspectWindow ? focusedWindowContext(app!) : (nil, nil)
         let payload: [String: Any] = ["available": available,
-                                      "appBundleId": available ? (bundle as Any? ?? NSNull()) : NSNull()]
+                                      "appBundleId": available ? (bundle as Any? ?? NSNull()) : NSNull(),
+                                      "windowTitle": window.0 as Any? ?? NSNull(),
+                                      "displayId": window.1 as Any? ?? NSNull()]
         guard var data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-              data.count <= 1024 else { return }
+              data.count <= 8192 else { return }
         data.append(10)
         let now = ProcessInfo.processInfo.systemUptime
         guard force || data != lastOutput || now - lastHeartbeat >= 2 else { return }
@@ -213,6 +278,8 @@ signal(SIGPIPE, SIG_IGN)
 let monitor = SessionMonitor()
 if CommandLine.arguments.contains("--self-test") {
     selfTestLockState()
+} else if CommandLine.arguments.contains("--context-self-test") {
+    selfTestWindowContext()
 } else if CommandLine.arguments.contains("--context-once") {
     ApplicationContextMonitor().emit(force: true)
 } else if CommandLine.arguments.contains("--context") {

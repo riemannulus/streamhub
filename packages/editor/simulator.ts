@@ -4,7 +4,7 @@ import {startSimulation, type SimulationHost, type SimulationEvent} from '../sim
 export type SimulatorEvent =
   | { type:'key'; index:number; rgb:string }
   | { type:'standby' }
-  | { type:'state'; pageId:string; manual:boolean; locked:boolean; inputEnabled:boolean; latencyMs:number; frames:number; keysSent:number; lastFrameMs:number }
+  | { type:'state'; pageId:string; manual:boolean; locked:boolean; inputEnabled:boolean; latencyMs:number; frames:number; keysSent:number; lastFrameMs:number; selectionReason?:string }
   | { type:'error'; message:string };
 
 export function validateSimulatorBoard(raw:unknown,sources:readonly string[]):PageConfig {
@@ -71,7 +71,7 @@ export class SimulatorSession {
     try{
       const {display}=await this.host.state();
       const event:SimulatorEvent={type:'state',pageId:display.pageId??'',manual:display.manual??false,locked:this.locked,inputEnabled:display.inputEnabled,
-        latencyMs:this.latencyMs,frames:this.frames,keysSent:this.keysSent,lastFrameMs:this.lastFrameMs};
+        latencyMs:this.latencyMs,frames:this.frames,keysSent:this.keysSent,lastFrameMs:this.lastFrameMs,selectionReason:display.selectionReason};
       const serialized=JSON.stringify(event);
       if(serialized!==this.lastState){this.lastState=serialized;this.send(event);}
     }catch{if(!this.stopped)this.send({type:'error',message:'Could not read simulator state'});}
@@ -93,7 +93,7 @@ export class SimulatorSession {
         case 'auto':await host.auto();break;
         case 'context':
           if(typeof command.available!=='boolean'||(command.appBundleId!==null&&(typeof command.appBundleId!=='string'||command.appBundleId.length>255)))throw new Error('Invalid application context');
-          host.setContext(command.appBundleId as string|null,command.available);break;
+          for(const field of ['windowTitle','displayId'])if(command[field]!==undefined&&command[field]!==null&&(typeof command[field]!=='string'||(command[field] as string).length>512))throw new Error('Invalid window context');host.setContext(command.appBundleId as string|null,command.available,{windowTitle:command.windowTitle as string|null|undefined,displayId:command.displayId as string|null|undefined});break;
         case 'lock':
           if(typeof command.locked!=='boolean')throw new Error('Invalid lock state');
           this.locked=command.locked;host.setSession(!this.locked);break;

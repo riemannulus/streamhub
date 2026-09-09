@@ -2,15 +2,23 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { buildHelper } from './session-monitor';
 
-/** App identity only. Window titles and project identity require separate adapters. */
-export type ApplicationContext = { available: boolean; appBundleId: string | null };
+/** Public app identity plus optional Accessibility window context; null means unknown. */
+export type ApplicationContext = { available: boolean; appBundleId: string | null; windowTitle?: string | null; displayId?: string | null };
 export function parseApplicationContext(raw: unknown): ApplicationContext {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid application context');
   const value = raw as Record<string, unknown>;
-  if (Object.keys(value).length !== 2 || typeof value.available !== 'boolean'
+  if (Object.keys(value).some(key => !['available','appBundleId','windowTitle','displayId'].includes(key)) || typeof value.available !== 'boolean'
     || (value.appBundleId !== null && (typeof value.appBundleId !== 'string' || !value.appBundleId.length || Buffer.byteLength(value.appBundleId) > 512))
     || (!value.available && value.appBundleId !== null)) throw new Error('Invalid application context');
-  return { available: value.available, appBundleId: value.appBundleId as string | null };
+  for (const key of ['windowTitle','displayId'] as const) {
+    if (!Object.hasOwn(value,key)) continue;
+    const field=value[key];
+    if (field !== null && (typeof field !== 'string' || field.length > (key==='windowTitle'?512:128) || Buffer.byteLength(field) > (key==='windowTitle'?2048:512) || (key==='displayId'&&!field.length))) throw new Error('Invalid application context');
+    if (!value.available && field !== null) throw new Error('Invalid application context');
+  }
+  return { available: value.available, appBundleId: value.appBundleId as string | null,
+    ...(Object.hasOwn(value,'windowTitle')?{windowTitle:value.windowTitle as string|null}:{}),
+    ...(Object.hasOwn(value,'displayId')?{displayId:value.displayId as string|null}:{}) };
 }
 
 export class ApplicationContextProtocol {
@@ -22,7 +30,7 @@ export class ApplicationContextProtocol {
     this.fail();
   }
   private emit(context: ApplicationContext) {
-    if (this.previous?.available === context.available && this.previous.appBundleId === context.appBundleId) return;
+    if (this.previous?.available === context.available && this.previous.appBundleId === context.appBundleId && this.previous.windowTitle === context.windowTitle && this.previous.displayId === context.displayId) return;
     this.previous = { ...context };
     this.onContext({ ...context });
   }
@@ -37,7 +45,7 @@ export class ApplicationContextProtocol {
         if (byte >= 0xf5 || byte === 0xc0 || byte === 0xc1) throw new Error('Invalid UTF8');
         if (byte !== 10) {
           this.pending.push(byte);
-          if (this.pending.length > 1024) throw new Error('Oversized line');
+          if (this.pending.length > 8192) throw new Error('Oversized line');
           continue;
         }
         const context = parseApplicationContext(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(this.pending))));
@@ -53,7 +61,7 @@ export class ApplicationContextProtocol {
   }
 }
 
-/** Read-only NSWorkspace observer; failure preserves unknown context for routing. */
+/** Read-only NSWorkspace/AX observer; failed window reads preserve app-only routing. */
 export async function startAppContextMonitor(
   onContext: (context: ApplicationContext) => void,
   options: { cacheDir?: string } = {},
