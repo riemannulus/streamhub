@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "start": "bun packages/host/src/main.ts",
     "editor": "bun scripts/editor.ts",
+    "simulator:check": "bun scripts/simulator-check.ts",
     "streamdeck:register": "bun scripts/register-streamdeck.ts",
     "demo": "bun scripts/demo.ts",
     "check": "bun run typecheck && bun test",

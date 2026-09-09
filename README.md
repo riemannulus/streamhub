@@ -205,3 +205,17 @@ bun run editor
 실제 장치의 밝기·전송 속도와 OS 잠금 알림 타이밍은 이 시뮬레이터로 검증할 수 없습니다. 편집기 종료는 실행 터미널에서 Ctrl-C입니다.
 
 [편집기·시뮬레이터 설계](docs/design/editor-and-simulator.md).
+
+## 화면 잠금 중 자동 검증
+
+```sh
+bun run simulator:check
+bun run simulator:check --scenario locked-update
+bun run simulator:check --list
+```
+
+실제 HTTP 수신·SQLite 저장·호스트 표시 로직에 가상 장치와 가상 OS 입력을 연결합니다. 브라우저나 실기기 조작 없이 저장·재시작, 잠금 중 갱신·복원, 키 누름 취소, 앱별 전환과 페이드 중단을 자동 판정합니다. 사용자의 설정·DB를 열지 않으며 실제 Stream Deck도 제어하지 않습니다. 화면이 잠겨 있어도 실행할 수 있지만 컴퓨터 자체가 잠자기 상태라면 실행도 멈춥니다.
+
+결과 경로는 터미널에 출력합니다. 기본값은 `.streamhub/simulator/` 아래의 고유 실행 디렉터리이며 `--out <directory>`로 저장 위치를 지정할 수 있습니다. `summary.json`에서 판정, 각 시나리오의 `replay.html`에서 키별 전송 재생, PNG에서 주요 화면, `trace.jsonl`에서 이벤트 순서를 확인합니다. 실패하면 증거를 남기고 종료 코드 1을 반환합니다.
+
+최종 출력은 15개 키의 RGB까지 비교합니다. 실제 패널의 밝기·잔상과 USB·OS 특유의 타이밍은 실기기 확인이 필요합니다. [자동 시뮬레이터 설계](docs/design/headless-simulator.md).
