@@ -25,6 +25,18 @@ async function setup() {
 }
 const save = (url:string, token:string, body:unknown, extra:Record<string,string> = {}) => fetch(`${url}/api/config`,{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':token,...extra},body:JSON.stringify(body)});
 
+test('draft checks require editor capability and expose only generated replay reports',async()=>{
+  const {url,bootstrap}=await setup();
+  const payload={board:{defaultPage:'custom',pages:[{id:'custom',title:'Custom',signals:{}}]}};
+  expect((await fetch(`${url}/api/check`,{method:'POST'})).status).toBe(403);
+  const response=await fetch(`${url}/api/check`,{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':bootstrap.token},body:JSON.stringify(payload)});
+  expect(response.status).toBe(200);
+  const result=await response.json();expect(result.passed).toBe(true);
+  const replay=await fetch(`${url}${result.report}`);expect(replay.status).toBe(200);
+  expect(replay.headers.get('Content-Security-Policy')).toContain('sandbox allow-scripts');
+  expect((await fetch(`${url}/reports/${'0'.repeat(32)}`)).status).toBe(404);
+});
+
 test('bootstrap is credential-free and cannot be read through foreign hosts or origins', async () => {
   const {url,bootstrap} = await setup();
   expect(bootstrap.sources).toEqual(['demo']);

@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { readConfig, updateConfig, validateConfig, type Config } from '../host/src/config';
 import { type PageConfig } from '../streamdeck/pages';
 import { SimulatorSession } from './simulator';
+import { checkDraft } from '../simulator/draft-check';
+import { validateSimulatorBoard } from './simulator';
 
 const LIMIT = 256 * 1024;
 const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
@@ -25,6 +27,8 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
   const token = randomBytes(32).toString('hex');
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
   const clients = new Set<Bun.ServerWebSocket<Client>>();
+  const reports=new Map<string,string>();
+  let checking:Promise<unknown>|undefined;
   let stopped = false;
   let stopping: Promise<void> | undefined;
   const headers = {
@@ -42,6 +46,12 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
       if (request.headers.get('host') !== `127.0.0.1:${server.port}`) return json({error:'Forbidden'}, 403);
       if (request.headers.has('origin') && request.headers.get('origin') !== origin) return json({error:'Forbidden'}, 403);
       if (url.pathname.startsWith('/api/') && request.headers.get('sec-fetch-site') === 'cross-site') return json({error:'Forbidden'}, 403);
+      const report=/^\/reports\/([a-f0-9]{32})$/.exec(url.pathname);
+      if(report&&request.method==='GET'){
+        const path=reports.get(report[1]);
+        if(!path)return json({error:'Not found'},404);
+        return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
+      }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
         try { const config = readConfig(); return json({token, board: boardOf(config), sources: Object.keys(config.sources), version: version(config)}); }
         catch { return json({error:'Could not read configuration'}, 500); }
@@ -54,6 +64,20 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
       }
       if (url.pathname.startsWith('/api/')) {
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
+        if(url.pathname==='/api/check'&&request.method==='POST'){
+          if(checking)return json({error:'A check is already running'},409);
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          let owned:Promise<unknown>|undefined;
+          try{
+            const payload=await request.json(),sources=Object.keys(readConfig().sources),board=validateSimulatorBoard(payload.board,sources);
+            if(checking||stopped)return json({error:'A check is already running or editor stopped'},409);
+            const id=randomBytes(16).toString('hex'),directory=resolve('.streamhub/editor-checks',id);
+            checking=owned=checkDraft(board,sources,directory);
+            const result=await checking;
+            reports.set(id,resolve(directory,'replay.html'));
+            return json({...result as object,report:`/reports/${id}`});
+          }catch{return json({error:'Draft check failed'},400);}finally{if(owned&&checking===owned)checking=undefined;}
+        }
         if (url.pathname === '/api/config' && request.method === 'POST') {
           if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return json({error:'JSON required'},415);
           try {
@@ -109,6 +133,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
       const pending = [...clients].map(socket => { socket.close(1001,'Editor stopped'); return socket.data.session?.stop(); });
       clients.clear();
       await Promise.allSettled(pending);
+      await checking?.catch(()=>{});
       await server.stop(true);
       })();
       return stopping;

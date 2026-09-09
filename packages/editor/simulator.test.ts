@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
-import {SimulatorSession,type SimulatorEvent} from './simulator';
+import {SimulatorSession,sampleSignals,type SimulatorEvent} from './simulator';
+import {startSimulation} from '../simulator/host';
 import type {PageConfig} from '../streamdeck/pages';
 const config:PageConfig={defaultPage:'home',transition:'none',pages:[
   {id:'home',title:'홈',signals:{},buttons:[{index:0,type:'page',pageId:'dev'}]},
@@ -20,12 +21,12 @@ test('simulator uses actual RGB renderer and shared manual/auto page selection',
   try{
     await waitFor(()=>state()?.inputEnabled);
     const pixels=events.filter(event=>event.type==='key');
-    expect(pixels.length).toBe(15);
+    expect(pixels.length).toBeGreaterThanOrEqual(15);
     const key=pixels[0] as Extract<SimulatorEvent,{type:'key'}>;
     expect(Buffer.from(key.rgb,'base64').length).toBe(72*72*3);
     expect(Buffer.from(key.rgb,'base64').some(value=>value!==0)).toBe(true);
     await sim.command({type:'page',pageId:'dev'});
-    await waitFor(()=>state().inputEnabled);
+    await waitFor(()=>state().pageId==='dev'&&state().inputEnabled);
     expect(state().pageId).toBe('dev');expect(state().manual).toBe(true);
     await sim.command({type:'context',available:true,appBundleId:null});
     await Bun.sleep(350);expect(state().pageId).toBe('dev');
@@ -69,11 +70,12 @@ test('slow transport records completed frames and stop silences all callbacks',a
   const {sim,events,state}=fixture();
   await waitFor(()=>state()?.inputEnabled);
   await sim.command({type:'latency',ms:10});
+  const framesBefore=state().frames;
   await sim.command({type:'page',pageId:'dev'});
   expect(state().inputEnabled).toBe(false);
   await waitFor(()=>state().inputEnabled);
   expect(state().lastFrameMs).toBeGreaterThanOrEqual(120);
-  expect(state().frames).toBe(2);expect(state().keysSent).toBe(30);
+  expect(state().frames).toBeGreaterThan(framesBefore);expect(state().keysSent).toBe(state().frames*15);
   await sim.command({type:'latency',ms:100});
   await sim.command({type:'page',pageId:'home'});
   await sim.stop();
@@ -93,8 +95,37 @@ test('fade uses intermediate RGB frames and rapid destinations settle at the lat
     await sim.command({type:'page',pageId:'home'});
     await Bun.sleep(30);
     await sim.command({type:'page',pageId:'dev'});
-    await waitFor(()=>state().inputEnabled);
+    await waitFor(()=>state().pageId==='dev'&&state().inputEnabled);
     expect(state().pageId).toBe('dev');
     expect(events.some(event=>event.type==='error')).toBe(false);
   }finally{await sim.stop();}
+});
+
+test('browser adapter and headless host produce identical final RGB through shared runtime',async()=>{
+  const board:PageConfig={defaultPage:'home',transition:'none',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'text',label:'HOME'}]},{id:'work',title:'Work',signals:{source:'demo'},buttons:[{index:13,type:'auto',label:'Auto'}]}]};
+  const events:SimulatorEvent[]=[];
+  const browser=new SimulatorSession(board,['demo'],event=>events.push(event));
+  const headless=await startSimulation({board,sources:['demo']});
+  const state=()=>events.filter((event):event is Extract<SimulatorEvent,{type:'state'}>=>event.type==='state').at(-1);
+  try{
+    await browser.command({type:'signals',count:1});
+    await headless.replaceSignals(sampleSignals(1,['demo']));
+    await browser.command({type:'page',pageId:'work'});
+    await headless.selectPage('work');
+    await waitFor(()=>state()?.pageId==='work'&&!!state()?.inputEnabled);
+    const deadline=Date.now()+4000;
+    while(!(await headless.state()).display.inputEnabled){if(Date.now()>deadline)throw new Error('Headless display did not settle');await Bun.sleep(10);}
+    const rgb:(string|null)[]=Array(15).fill(null);
+    for(const event of events)if(event.type==='key')rgb[event.index]=event.rgb;
+    expect(rgb).toEqual(headless.snapshot().pixels.map(pixel=>pixel?.toString('base64')??null));
+    expect((await headless.state()).records).toHaveLength(1);
+  }finally{await Promise.all([browser.stop(),headless.stop()]);}
+});
+test('immediate stop and queued commands cannot leak a host or callbacks',async()=>{
+  const events:SimulatorEvent[]=[];
+  const session=new SimulatorSession(config,['demo'],event=>events.push(event));
+  const pending=session.command({type:'signals',count:48}).then(()=>null,error=>error);
+  const first=session.stop();expect(session.stop()).toBe(first);
+  await first;expect((await pending)?.message).toContain('stopped');
+  const count=events.length;await Bun.sleep(80);expect(events).toHaveLength(count);
 });

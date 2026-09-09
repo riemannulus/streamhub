@@ -50,3 +50,5 @@ $('export').onclick=()=>{const blob=new Blob([JSON.stringify(board,null,2)+'\n']
 window.addEventListener('beforeunload',e=>{releaseAll();if(dirty()&&ready){e.preventDefault();e.returnValue='';}});
 $('reduced-motion').hidden=!matchMedia('(prefers-reduced-motion: reduce)').matches;
 void load();
+
+$('check-draft').onclick=async()=>{if(!valid())return;const button=$<HTMLButtonElement>('check-draft');button.disabled=true;button.textContent='검증 중…';try{const response=await fetch('/api/check',{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':token},body:JSON.stringify({board})});const result=await response.json();if(!response.ok)throw new Error(result.error);$('notice').textContent=result.checks.map((check:{name:string;status:string})=>`${check.status.toUpperCase()} ${check.name}`).join(' · ');const link=$<HTMLAnchorElement>('check-report');link.href=result.report;link.hidden=false;}catch(e){error(String(e));}finally{button.disabled=false;button.textContent='초안 검증';}};

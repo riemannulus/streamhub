@@ -4,7 +4,7 @@ import { DisplayLifecycle, type DisplayDevice } from '../../streamdeck/lifecycle
 import { openHidDisplay } from '../../streamdeck/hid';
 import { startSessionMonitor, type SessionState } from './session-monitor';
 import type { SignalStore } from './store';
-import { PageBoard, type PageBoardLayout, type PageConfig } from '../../streamdeck/pages';
+import { PageBoard, validatePageConfig, type PageBoardLayout, type PageConfig } from '../../streamdeck/pages';
 import { startAppContextMonitor, type ApplicationContext } from './app-context';
 
 type DisplayOptions={
@@ -19,8 +19,9 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
   const cancelled=()=>new DOMException('Display startup was cancelled','AbortError');
   if(options.signal?.aborted)throw cancelled();
   const layoutName=options.board?'streamdeck-pages-v1-15x72':'streamdeck-v1-15x72';
-  const board=options.board?new PageBoard(options.board,store.getViewState(layoutName) as PageBoardLayout|undefined):undefined;
-  const deck=board??new SessionDeck(store.getViewState(layoutName) as DeckLayout|undefined);
+  let config=options.board;
+  let board=options.board?new PageBoard(options.board,store.getViewState(layoutName) as PageBoardLayout|undefined):undefined;
+  let deck=board??new SessionDeck(store.getViewState(layoutName) as DeckLayout|undefined);
   let context:ApplicationContext={available:false,appBundleId:null};
   let session:SessionState={active:false,reason:'monitor-unavailable'};
   let stopped=false,lastFrame='',lastLayout='',lastError:string|undefined;
@@ -98,7 +99,7 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
     if(!state.active)deck.cancelInput();else refresh();
     syncAllowed();
     });
-    if(stopped || !options.board?.pages.some(page=>page.match))return sessionMonitor;
+    if(stopped || (!options.context && !options.board?.pages.some(page=>page.match)))return sessionMonitor;
     try{
       const contextMonitor=await (options.context??(callback=>startAppContextMonitor(callback,{cacheDir:join(directory,'native')})))(value=>{
         if(stopped)return;
@@ -127,7 +128,19 @@ export async function startDisplay(store:SignalStore,directory:string,options:Di
   rejectStartup=undefined;
   tick=setInterval(refresh,options.pollMs??100);
   retry=setInterval(()=>{void lifecycle.retry();},2000);
+  function replaceBoard(input:PageConfig,selectedPage?:string,manual?:boolean){
+    if(stopped)throw new Error('Display is stopped');
+    if(!board)throw new Error('Page editing requires a configured page board');
+    const next=validatePageConfig(input),layout=board.exportLayout();
+    const current=selectedPage??(next.pages.some(page=>page.id===layout.currentPage)?layout.currentPage:next.defaultPage);
+    if(!next.pages.some(page=>page.id===current))throw new Error(`Unknown page: ${current}`);
+    const replacement=new PageBoard(next,{...layout,currentPage:current,manual:manual??(selectedPage!==undefined?true:layout.manual)});
+    deck.cancelInput();config=next;board=replacement;deck=replacement;lastFrame='';refresh();
+  }
   return {
+    applyDraft:(input:PageConfig,selectedPage?:string)=>replaceBoard(input,selectedPage),
+    selectPage:(pageId:string)=>replaceBoard(config!,pageId,true),
+    auto:()=>replaceBoard(config!,undefined,false),
     status:()=>({session:{...session},inputEnabled:lifecycle.inputEnabled,lastError,...(board?{pageId:board.page().viewId,manual:board.exportLayout().manual,context:{...context}}:{})}),
     stop,
   };

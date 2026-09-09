@@ -44,3 +44,26 @@ test('locked updates remain stored and unlock sends the newest actual RGB frame'
     expect(sim.snapshot().standby).toBe(false);
   }finally{await sim.stop();}
 });
+
+test('drafts and multi-source HTTP replacement preserve fresh records and locked context',async()=>{
+  const sim=await startSimulation({sources:['alpha','beta'],board:{defaultPage:'one',transition:'none',pages:[{id:'one',title:'One',signals:{}}]}});
+  try{
+    await sim.replaceSignals([{source:'alpha',id:'a',label:'Alpha'},{source:'beta',id:'b',label:'Beta'}]);
+    await ready(sim,'Alpha');
+    sim.setContext('test.editor');sim.setSession(false);await Bun.sleep(50);
+    const before=await sim.state();
+    await sim.applyDraft({defaultPage:'one',transition:'none',pages:[{id:'one',title:'One',signals:{source:'alpha'}},{id:'two',title:'Two',match:{appBundleId:'test.editor'},signals:{source:'beta'}}]},'two');
+    expect((await sim.state()).records).toEqual(before.records);
+    expect((await sim.state()).display.session.active).toBe(false);
+    expect(sim.snapshot().standby).toBe(true);
+    sim.setSession(true);await ready(sim,'Beta');
+    expect((await sim.state()).display.pageId).toBe('two');
+    await sim.selectPage('one');await ready(sim,'Alpha');
+    await sim.auto();await Bun.sleep(350);await ready(sim,'Beta');
+    expect((await sim.state()).display.manual).toBe(false);
+    await expect(sim.applyDraft({defaultPage:'bad',pages:[{id:'bad',title:'Bad',signals:{source:'missing'}}]})).rejects.toThrow();
+    expect((await sim.state()).display.pageId).toBe('two');
+    await sim.replaceSignals([{source:'alpha',id:'c',label:'Changed'}]);
+    expect((await sim.state()).records.map(record=>record.id)).toEqual(['c']);
+  }finally{await sim.stop();}
+});
