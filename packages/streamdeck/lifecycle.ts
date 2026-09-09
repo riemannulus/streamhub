@@ -12,6 +12,8 @@ class DisplayTimeout extends Error {}
 export class DisplayLifecycle {
   private device?: DisplayDevice;
   private latest?: DeckPage;
+  private attemptedPage?: string;
+  private transitioning = false;
   private version = 0;
   private rendered = -1;
   private allowed = false;
@@ -47,6 +49,7 @@ export class DisplayLifecycle {
   }
   present(frame: DeckPage): Promise<void> {
     if (this.stopped) return this.pump ?? Promise.resolve();
+    if (this.transitioning || (this.latest && (this.latest.viewId !== frame.viewId || this.latest.index !== frame.index))) this.invalidate();
     this.latest = structuredClone(frame);
     this.version++;
     return this.schedule();
@@ -138,6 +141,7 @@ export class DisplayLifecycle {
     }
     this.cleared = false;
     this.rendered = -1;
+    this.attemptedPage = undefined;
   }
   private async reconcile(): Promise<void> {
     try {
@@ -166,6 +170,9 @@ export class DisplayLifecycle {
         if (this.rendered === this.version) return;
         const version = this.version;
         const controller = new AbortController();
+        const page = JSON.stringify([this.latest.viewId ?? 'legacy', this.latest.index]);
+        this.transitioning = this.attemptedPage !== undefined && this.attemptedPage !== page;
+        this.attemptedPage = page;
         this.controller = controller;
         this.armed.clear();
         this.releaseRequired = this.held.size > 0;
@@ -174,7 +181,7 @@ export class DisplayLifecycle {
           if (error instanceof DisplayTimeout) { controller.abort(); throw error; }
           if (!controller.signal.aborted) throw error;
         }
-        finally { this.controller = undefined; }
+        finally { this.controller = undefined; this.transitioning = false; }
         if (!controller.signal.aborted && this.allowed && !this.cleanupRequested && !this.closeRequested) {
           this.rendered = version;
           this.releaseRequired = this.held.size > 0;

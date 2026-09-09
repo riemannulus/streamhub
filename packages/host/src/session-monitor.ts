@@ -52,7 +52,7 @@ export class SessionMonitorProtocol {
   }
 }
 
-async function buildHelper(cacheDir: string): Promise<string> {
+export async function buildHelper(cacheDir: string): Promise<string> {
   const source = join(dirname(fileURLToPath(import.meta.url)), '../native/session-monitor.swift');
   const compiler = '/usr/bin/swiftc';
   const compilerStat = await stat(compiler);

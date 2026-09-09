@@ -24,3 +24,10 @@ test('untrusted markup is rendered as text and stale looks different', async () 
   deck.update([{...record,freshness:'stale'}]);page=deck.page();
   expect((await renderKey(page.keys[0],page)).equals(fresh)).toBe(false);
 });
+
+test('configured tiles escape text and reject markup in their color',async()=>{
+  const page=new SessionDeck().page();
+  const bytes=await renderKey({type:'tile',index:0,label:'<img>',subtitle:'&hello',foot:'<script>',color:'red"/><image href="file:///etc/passwd'},page);
+  expect(bytes.length).toBe(72*72*3);
+  expect([...bytes.subarray((3*72+36)*3,(3*72+36)*3+3)]).toEqual([66,96,135]);
+});

@@ -3,6 +3,38 @@ import { SignalStore } from './store';
 import { startDisplay } from './display';
 import type { SessionState } from './session-monitor';
 import { SessionDeck, type DeckPage } from '../../streamdeck';
+import type { ApplicationContext } from './app-context';
+
+test('configured pages route by app while manual selection holds until auto is pressed',async()=>{
+  const store=new SignalStore(':memory:');
+  let key!:(index:number,edge:'down'|'up')=>void;
+  let context!:(value:ApplicationContext)=>void;
+  let frame:DeckPage|undefined;
+  const display=await startDisplay(store,'/private/tmp',{
+    board:{defaultPage:'home',transition:'fade',durationMs:250,pages:[
+      {id:'home',title:'Home',signals:{},buttons:[{index:12,type:'page',pageId:'dev'}]},
+      {id:'dev',title:'Dev',match:{appBundleId:'test.editor'},buttons:[{index:12,type:'page',pageId:'home'},{index:13,type:'auto'}]},
+    ]},pollMs:5,
+    connect:async(callback)=>{key=callback;return{write:async(value)=>{frame=value;},standby:async()=>{},close:async()=>{}};},
+    monitor:async(callback)=>{callback({active:true,reason:'active'});return{stop:async()=>{}};},
+    context:async(callback)=>{context=callback;return{stop:async()=>{}};},
+  });
+  try{
+    await waitFor(()=>display.status().inputEnabled && frame?.viewId==='home');
+    key(12,'down');key(12,'up');
+    await waitFor(()=>display.status().inputEnabled && frame?.viewId==='dev');
+    context({available:true,appBundleId:'other.app'});
+    await Bun.sleep(300);
+    expect(frame?.viewId).toBe('dev');
+    key(13,'down');key(13,'up');
+    await waitFor(()=>frame?.viewId==='home');
+    context({available:true,appBundleId:'test.editor'});
+    await waitFor(()=>frame?.viewId==='dev');
+    context({available:false,appBundleId:null});
+    await Bun.sleep(300);
+    expect(frame?.viewId).toBe('dev');
+  }finally{await display.stop();store.close();}
+});
 
 test('monitor startup failure cleans an already-acquired display',async()=>{
   const store=new SignalStore(':memory:');const calls:string[]=[];

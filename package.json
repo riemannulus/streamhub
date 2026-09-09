@@ -14,6 +14,7 @@
     "hid:check": "bun scripts/hid-check.ts",
     "hid:restore": "bun scripts/hid-restore.ts",
     "hid:lifecycle-check": "bun scripts/hid-lifecycle-check.ts",
+    "hid:pages-check": "bun scripts/hid-pages-check.ts",
     "build": "bun scripts/build.ts"
   },
   "devDependencies": {

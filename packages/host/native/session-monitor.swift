@@ -166,10 +166,57 @@ final class SessionMonitor: NSObject {
     }
 }
 
+// App context uses public NSWorkspace APIs only; no Accessibility permission.
+// https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication
+// https://developer.apple.com/documentation/appkit/nsworkspace/didactivateapplicationnotification
+final class ApplicationContextMonitor: NSObject {
+    private var lastOutput: Data?
+    private var lastHeartbeat: TimeInterval = -.infinity
+
+    func emit(force: Bool = false) {
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let validConsole = session?[kCGSessionOnConsoleKey as String] as? Bool == true
+            && session?[kCGSessionLoginDoneKey as String] as? Bool == true
+        let app = validConsole ? NSWorkspace.shared.frontmostApplication : nil
+        let bundle = app?.bundleIdentifier
+        let validBundle = bundle == nil || (!bundle!.isEmpty && bundle!.utf8.count <= 512)
+        let available = app != nil && validBundle
+        let payload: [String: Any] = ["available": available,
+                                      "appBundleId": available ? (bundle as Any? ?? NSNull()) : NSNull()]
+        guard var data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              data.count <= 1024 else { return }
+        data.append(10)
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || data != lastOutput || now - lastHeartbeat >= 2 else { return }
+        FileHandle.standardOutput.write(data)
+        lastOutput = data
+        lastHeartbeat = now
+    }
+
+    @objc func changed(_ note: Notification) { emit() }
+    @objc func tick(_ timer: Timer) { emit() }
+    func start() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
+            center.addObserver(self, selector: #selector(changed(_:)), name: name, object: nil)
+        }
+        emit(force: true)
+        let timer = Timer(timeInterval: 0.25, target: self, selector: #selector(tick(_:)), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.run()
+    }
+}
+
 signal(SIGPIPE, SIG_IGN)
 let monitor = SessionMonitor()
 if CommandLine.arguments.contains("--self-test") {
     selfTestLockState()
+} else if CommandLine.arguments.contains("--context-once") {
+    ApplicationContextMonitor().emit(force: true)
+} else if CommandLine.arguments.contains("--context") {
+    ApplicationContextMonitor().start()
 } else if CommandLine.arguments.contains("--once") {
     monitor.reconcile()
     monitor.emit(force: true)

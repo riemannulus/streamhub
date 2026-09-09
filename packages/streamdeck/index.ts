@@ -6,11 +6,12 @@ export type SessionRecord = SignalKey & {
   freshness: 'fresh' | 'stale';
 };
 export type DeckKey =
+  | { type: 'tile'; index: number; label: string; subtitle?: string; foot?: string; color?: string; enabled?: boolean }
   | { type: 'empty'; index: number }
   | { type: 'signal'; index: number; record: SessionRecord }
   | { type: 'previous' | 'next'; index: number; enabled: boolean; urgentCount: number }
   | { type: 'pin'; index: number; record?: SessionRecord; hiddenCount: number };
-export type DeckPage = { index: number; pageCount: number; epoch: number; keys: DeckKey[] };
+export type DeckPage = { index: number; pageCount: number; epoch: number; keys: DeckKey[]; viewId?: string; transition?: { type: 'none' | 'fade'; durationMs: number } };
 export type PressIntent = { type: 'effect'; key: SignalKey; revision: number; effect: Effect }
   | { type: 'navigate'; page: number; highlight?: SignalKey };
 export type DeckLayout = { version: 1; slots: (SignalKey | null)[]; currentPage: number };
@@ -28,10 +29,18 @@ export class SessionDeck {
   private pinned?: string;
   private blockedUntilRelease = false;
 
-  constructor(layout?: DeckLayout) {
+  private readonly contentKeys: readonly number[];
+  private get capacity(): number { return this.contentKeys.length; }
+
+  constructor(layout?: DeckLayout, contentKeys: readonly number[] = CONTENT_KEYS) {
+    if (!contentKeys.length || new Set(contentKeys).size !== contentKeys.length
+      || contentKeys.some(key => !(CONTENT_KEYS as readonly number[]).includes(key))) {
+      throw new Error('Content keys must be a nonempty unique subset of content positions');
+    }
+    this.contentKeys = [...contentKeys];
     if (!layout) return;
     if (layout.version !== 1 || !Array.isArray(layout.slots) || !Number.isInteger(layout.currentPage)
-      || layout.currentPage < 0 || layout.currentPage >= Math.max(1, Math.ceil(layout.slots.length / 12))) {
+      || layout.currentPage < 0 || layout.currentPage >= Math.max(1, Math.ceil(layout.slots.length / this.capacity))) {
       throw new Error('Invalid or incompatible deck layout');
     }
     const seen = new Set<string>();
@@ -75,7 +84,7 @@ export class SessionDeck {
   }
 
   private trim(): void {
-    while (this.slots.length > (this.current + 1) * 12 && this.slots.at(-1) === null) this.slots.pop();
+    while (this.slots.length > (this.current + 1) * this.capacity && this.slots.at(-1) === null) this.slots.pop();
   }
 
   page(index = this.current): DeckPage {
@@ -88,16 +97,16 @@ export class SessionDeck {
       this.trim();
     }
     const keys: DeckKey[] = Array.from({ length: 15 }, (_, index) => ({ type: 'empty', index }));
-    CONTENT_KEYS.forEach((physical, offset) => {
-      const key = this.slots[this.current * 12 + offset];
+    this.contentKeys.forEach((physical, offset) => {
+      const key = this.slots[this.current * this.capacity + offset];
       const record = key ? this.records.get(key) : undefined;
       if (record) keys[physical] = { type: 'signal', index: physical, record: structuredClone(record) };
     });
     let before = 0, after = 0;
     this.slots.forEach((key, slot) => {
       if (!key || !this.urgent.has(key)) return;
-      if (slot < this.current * 12) before++;
-      if (slot >= (this.current + 1) * 12) after++;
+      if (slot < this.current * this.capacity) before++;
+      if (slot >= (this.current + 1) * this.capacity) after++;
     });
     const pinned = this.pinned ? this.records.get(this.pinned) : undefined;
     keys[10] = { type: 'previous', index: 10, enabled: this.current > 0, urgentCount: before };
@@ -106,7 +115,7 @@ export class SessionDeck {
     return { index: this.current, pageCount: this.pageCount, epoch: this.epoch, keys };
   }
 
-  private get pageCount(): number { return Math.max(1, Math.ceil(this.slots.length / 12), this.current + 1); }
+  private get pageCount(): number { return Math.max(1, Math.ceil(this.slots.length / this.capacity), this.current + 1); }
 
   cancelInput(index?: number): void {
     if (index === undefined) this.held.clear();
@@ -134,7 +143,7 @@ export class SessionDeck {
     }
     if (current.type === 'pin' && current.record) {
       const { source, id } = current.record;
-      const page = this.page(Math.floor(this.slots.indexOf(keyOf(current.record)) / 12)).index;
+      const page = this.page(Math.floor(this.slots.indexOf(keyOf(current.record)) / this.capacity)).index;
       return { type: 'navigate', page, highlight: { source, id } };
     }
     if ((current.type === 'next' || current.type === 'previous') && current.enabled) {

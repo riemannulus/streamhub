@@ -4,6 +4,7 @@ import { validateConfig, type Config } from './config';
 import { Reconciler, type Membership } from './reconciler';
 import { startServer, type ServerOptions } from './server';
 import { SignalStore } from './store';
+import type { PageConfig } from '../../streamdeck/pages';
 
 type Collector = NonNullable<Config['collectors']>[number];
 type HostServer = { url: URL; stop(closeActiveConnections?: boolean): void | Promise<void> };
@@ -11,7 +12,7 @@ type HostDisplay = { status(): unknown; stop(): Promise<void> };
 export type HostDependencies = {
   openStore(path: string): SignalStore;
   serve(options: ServerOptions): HostServer;
-  display(store: SignalStore, directory: string, options: { signal: AbortSignal }): Promise<HostDisplay>;
+  display(store: SignalStore, directory: string, options: { signal: AbortSignal; board?: PageConfig }): Promise<HostDisplay>;
   collect(collector: Collector): Promise<Membership>;
 };
 export type HostOptions = { signal?: AbortSignal; onError?: (error: unknown) => void; dependencies?: Partial<HostDependencies> };
@@ -105,7 +106,7 @@ export async function startHost(input: Config, directory: string, options: HostO
         const module = await import('./display');
         return module.startDisplay(store, directory, options);
       });
-      pendingDisplay = factory(store, directory, { signal: controller.signal });
+      pendingDisplay = factory(store, directory, { signal: controller.signal, board: config.streamdeck?.board });
       display=await untilAborted(pendingDisplay, controller.signal);
       checkCancelled();
     }

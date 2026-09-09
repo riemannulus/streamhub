@@ -1,0 +1,27 @@
+{
+  "defaultPage": "home",
+  "transition": "fade",
+  "durationMs": 250,
+  "pages": [
+    {
+      "id": "home",
+      "title": "홈",
+      "signals": {},
+      "buttons": [
+        { "index": 12, "type": "page", "pageId": "terminal", "label": "터미널" },
+        { "index": 13, "type": "auto", "label": "자동" }
+      ]
+    },
+    {
+      "id": "terminal",
+      "title": "터미널",
+      "match": { "appBundleId": "com.apple.Terminal" },
+      "signals": { "source": "demo" },
+      "buttons": [
+        { "index": 11, "type": "text", "label": "터미널 작업" },
+        { "index": 12, "type": "page", "pageId": "home", "label": "홈" },
+        { "index": 13, "type": "auto", "label": "자동" }
+      ]
+    }
+  ]
+}

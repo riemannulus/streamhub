@@ -255,3 +255,39 @@ test('a burst during one pending write shares one bounded pump and renders only 
   expect(hw.commands).toEqual(['open', 'write:1', 'write:1001']);
   await life.stop();
 });
+
+test('page supersession aborts the old write and gates held input through the final page',async()=>{
+  const started=deferred();const final=deferred();const commands:string[]=[];
+  const lifecycle=new DisplayLifecycle(async()=>({
+    write:async(page,signal)=>{
+      commands.push(page.viewId!);
+      if(page.viewId==='b'){
+        started.resolve();await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));
+      }
+      if(page.viewId==='c')await final.promise;
+    },standby:async()=>{},close:async()=>{},
+  }));
+  await lifecycle.present({...frame(),viewId:'a'});await lifecycle.setAllowed(true);
+  expect(lifecycle.noteKey(0,'down')).toBe(true);
+  const work=lifecycle.present({...frame(),viewId:'b'});await started.promise;
+  void lifecycle.present({...frame(),viewId:'c'});
+  expect(lifecycle.inputEnabled).toBe(false);
+  final.resolve();await work;
+  expect(commands).toEqual(['a','b','c']);expect(lifecycle.inputEnabled).toBe(false);
+  expect(lifecycle.noteKey(0,'up')).toBe(false);expect(lifecycle.inputEnabled).toBe(true);
+  await lifecycle.stop();
+});
+
+test('fresh state for the destination page cancels its obsolete transition',async()=>{
+  const started=deferred();const received:number[]=[];let aborted=false;
+  const lifecycle=new DisplayLifecycle(async()=>({write:async(page,signal)=>{
+    received.push(page.epoch);
+    if(page.epoch===2){started.resolve();await new Promise<void>(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));}
+  },standby:async()=>{},close:async()=>{}}));
+  await lifecycle.present({...frame(1),viewId:'a'});await lifecycle.setAllowed(true);
+  const work=lifecycle.present({...frame(2),viewId:'b'});await started.promise;
+  void lifecycle.present({...frame(3),viewId:'b'});
+  await work;
+  expect(aborted).toBe(true);expect(received).toEqual([1,2,3]);expect(lifecycle.inputEnabled).toBe(true);
+  await lifecycle.stop();
+});

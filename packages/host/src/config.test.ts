@@ -18,6 +18,18 @@ function path() {
 }
 const valid = () => ({ port: 31415, adminToken: 'a'.repeat(32), sources: { demo: { token: 'b'.repeat(32) } } });
 
+test('page configuration validates references before saving and preserves existing configuration', () => {
+  const file = path();
+  const original = readConfig(true);
+  const board = {defaultPage:'home',transition:'fade' as const,durationMs:250,pages:[{id:'home',title:'Home',signals:{},buttons:[{index:13,type:'auto' as const}]}]};
+  expect(() => validateConfig({...original,streamdeck:{enabled:true,board}})).not.toThrow();
+  updateConfig(config => ({...config,streamdeck:{enabled:true,board}}));
+  expect(readConfig().adminToken).toBe(original.adminToken);
+  const before = readFileSync(file, 'utf8');
+  expect(() => updateConfig(config => ({...config,streamdeck:{enabled:true,board:{...board,defaultPage:'missing'}}}))).toThrow();
+  expect(readFileSync(file, 'utf8')).toBe(before);
+});
+
 test('initialization and registration preserve tokens and unknown settings across repeated updates', () => {
   const file = path();
   const first = readConfig(true);
@@ -60,8 +72,8 @@ test('all host configuration is validated before startup resources are created',
 test('registration CLI creates configuration and safely repeats using shared update', async () => {
   const file = path();
   const script = new URL('../../../scripts/register-streamdeck.ts', import.meta.url).pathname;
-  const run = async () => {
-    const child = Bun.spawn([process.execPath, script], { env: { ...process.env, STREAMHUB_CONFIG: file }, stdout: 'pipe', stderr: 'pipe' });
+  const run = async (...args:string[]) => {
+    const child = Bun.spawn([process.execPath, script, ...args], { env: { ...process.env, STREAMHUB_CONFIG: file }, stdout: 'pipe', stderr: 'pipe' });
     expect(await child.exited).toBe(0);
   };
   await run();
@@ -69,4 +81,9 @@ test('registration CLI creates configuration and safely repeats using shared upd
   expect(first.streamdeck?.enabled).toBe(true);
   await run();
   expect(readConfig()).toEqual(first);
+  await run('--pages', new URL('../../../examples/pages.json', import.meta.url).pathname);
+  expect(readConfig().streamdeck?.board?.pages).toHaveLength(2);
+  expect(readConfig().adminToken).toBe(first.adminToken);
+  await run();
+  expect(readConfig().streamdeck?.board?.transition).toBe('fade');
 });

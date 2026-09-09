@@ -18,6 +18,9 @@ export async function renderKey(key:DeckKey,page:DeckPage):Promise<Buffer> {
       color=key.record.freshness==='stale' ? '#666666' : colors[key.record.level];
       if(key.type==='pin' && key.hiddenCount) subtitle+=` +${key.hiddenCount}`;
     } else { title='PIN';foot='—'; }
+  } else if(key.type==='tile'){
+    title=key.label;subtitle=key.subtitle ?? '';foot=key.foot ?? '';
+    color=key.enabled===false?'#24282e':key.color && /^#[0-9a-f]{6}$/i.test(key.color)?key.color:'#426087';
   } else {
     title=key.type==='previous'?'←':'→';
     subtitle=`${page.index+1}/${page.pageCount}`;

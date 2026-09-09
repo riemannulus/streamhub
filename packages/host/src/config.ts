@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { ActionRegistry, type ActionDefinition } from './actions';
+import { validatePageConfig, type PageConfig } from '../../streamdeck/pages';
 
 export type SourceConfig = { token: string; allowedHosts?: string[] };
 export type AuthConfig = { adminToken: string; sources: Record<string, SourceConfig> };
 export type Config = AuthConfig & {
   port: number;
-  streamdeck?: { enabled: boolean };
+  streamdeck?: { enabled: boolean; board?: PageConfig };
   actions?: Record<string, ActionDefinition>;
   collectors?: Array<{ source: string; exec: string[]; intervalMs: number; timeoutMs?: number }>;
 };
@@ -32,7 +33,13 @@ export function validateConfig(input: unknown): Config {
   validateAuthConfig(input);
   const config = input as AuthConfig & Record<string, unknown>;
   if (!Number.isInteger(config.port) || (config.port as number) < 1 || (config.port as number) > 65535) throw new Error('Invalid host port');
-  if (config.streamdeck !== undefined && (!record(config.streamdeck) || typeof config.streamdeck.enabled !== 'boolean' || Object.keys(config.streamdeck).some(key => key !== 'enabled'))) throw new Error('Invalid streamdeck config');
+  if (config.streamdeck !== undefined) {
+    if (!record(config.streamdeck) || typeof config.streamdeck.enabled !== 'boolean' || Object.keys(config.streamdeck).some(key => !['enabled','board'].includes(key))) throw new Error('Invalid streamdeck config');
+    if (config.streamdeck.board !== undefined) {
+      const board = validatePageConfig(config.streamdeck.board);
+      for (const page of board.pages) if (page.signals?.source && !Object.hasOwn(config.sources, page.signals.source)) throw new Error('Page filters require registered sources');
+    }
+  }
   if (config.actions !== undefined) {
     if (!record(config.actions)) throw new Error('Invalid actions');
     for (const action of Object.values(config.actions)) {
