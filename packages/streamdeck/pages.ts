@@ -226,7 +226,11 @@ export class PageBoard{
   private allDecks():SessionDeck[]{return[...this.decks.values(),...[...this.regionDecks.values()].flatMap(regions=>[...regions.values()])];}
   private parts():SessionDeck[]{return[this.deck,...this.regionDecks.get(this.current)!.values()];}
   private composedPage():DeckPage{
-    if(!this.definition.regions?.length)return this.deck.page();
+    if(!this.definition.regions?.length){
+      const frame=this.deck.page();
+      if(this.definition.signals!==undefined)return frame;
+      return{...frame,keys:frame.keys.map((key,index)=>index===10||index===13||index===14?{type:'empty',index}:key)};
+    }
     const parts=this.parts(),count=Math.max(...parts.map(deck=>deck.page().pageCount));
     const index=Math.min(this.globalPages.get(this.current)??0,count-1);this.globalPages.set(this.current,index);
     const frames=parts.map(deck=>deck.page(index)),frame=frames[0];

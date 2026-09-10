@@ -235,3 +235,9 @@ test('Studio v2 adapter reuses stable region allocation and fixed effects',()=>{
   expect(board.page().keys[0]).toMatchObject({type:'tile'});expect(board.page().keys[1]).toMatchObject({type:'signal',record:{id:'one'}});
   expect(click(board,0)).toMatchObject({type:'button-effect',effect:{type:'app',bundleId:'org.mozilla.firefox'}});
 });
+
+test('Studio background-only pages do not cover the canvas with empty pagination controls',()=>{
+  const doc=defaultStudioDocument();doc.pages[0].buttons=[{index:0,type:'app',bundleId:'org.mozilla.firefox'}];
+  const board=new PageBoard(studioDocumentToPageConfig(doc));
+  expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty')]);
+});
