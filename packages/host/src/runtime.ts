@@ -10,6 +10,8 @@ import { SignalStore } from './store';
 import type { PageConfig } from '../../streamdeck/pages';
 import {startPluginGateway,type PluginGateway} from './plugin-gateway';
 import {startPresentationService,type PresentationService} from './presentation';
+import {startSessionMonitor} from './session-monitor';
+import {startAppContextMonitor} from './app-context';
 
 type Collector = NonNullable<Config['collectors']>[number];
 type HostServer = { url: URL; stop(closeActiveConnections?: boolean): void | Promise<void> };
@@ -49,6 +51,7 @@ export async function startHost(input: Config, directory: string, options: HostO
   let pendingDisplay: Promise<HostDisplay> | undefined;
   let pluginGateway:PluginGateway|undefined;
   let presentation:PresentationService|undefined;
+  let presentationMonitor:{stop():Promise<void>}|undefined;
   let startupFailure:unknown;
   let closed = false;
   let stopping: Promise<void> | undefined;
@@ -66,7 +69,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       // handle has been acquired and disposed, rather than orphaning it on exit.
       let pendingFailure:unknown;
       if(pendingDisplay){try{display=await pendingDisplay;}catch(error){pendingFailure=error;}}
-      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginGateway?.stop())]);
+      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginGateway?.stop())]);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => server?.stop(true))]));
       results.push(...await Promise.allSettled([...jobs]));
       results.push(...await Promise.allSettled([Promise.resolve().then(() => store?.close())]));
@@ -92,6 +95,9 @@ export async function startHost(input: Config, directory: string, options: HostO
       const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
       pluginGateway=startPluginGateway({port:config.streamdeckPlugin.port,token,onMessage:message=>{void presentation?.message(message).catch(report);}});
       presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions)});
+      const sessionMonitor=await startSessionMonitor(state=>{void presentation?.message({v:1,type:'lock',locked:!state.active}).catch(report);},{cacheDir:join(directory,'native')});
+      const contextMonitor=await startAppContextMonitor(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
+      presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};
     }
     server = (dependencies.serve ?? startServer)({ store, port: config.port, adminToken: config.adminToken, sources: config.sources, actions, health: () => reconciler.health(), display: () => presentation?.status()??display?.status(),...(presentation?{studio:presentation}:{}) });
     checkCancelled();

@@ -102,6 +102,8 @@ type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:num
 
 ### Task 3: Full-LCD Renderer and Transition Compiler
 
+**Status:** Implemented and regression-tested in `7c5112c`.
+
 **Files:**
 - Create: `packages/presentation/geometry.ts`
 - Create: `packages/presentation/geometry.test.ts`
@@ -130,6 +132,8 @@ type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:num
 - [ ] **Step 10: Commit `feat(presentation): render full-deck animated frames`**
 
 ### Task 4: Authenticated Plugin Protocol and Runtime Presentation Service
+
+**Status:** Implemented and regression-tested in `f8837f2`; signal polling and native session/app-context monitoring were completed with Task 6.
 
 **Files:**
 - Create: `packages/presentation/protocol.ts`
@@ -165,6 +169,8 @@ type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:num
 
 ### Task 5: Production Stream Deck Plugin, Cache, and Profile Setup
 
+**Status:** Implemented and regression-tested in `5aea24f`, including a generated 15-cell profile.
+
 **Files:**
 - Create: `packages/streamdeck-plugin/package.json`
 - Create: `packages/streamdeck-plugin/tsconfig.json`
@@ -198,6 +204,8 @@ type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:num
 - [ ] **Step 11: Commit `feat(streamdeck): add production canvas plugin`**
 
 ### Task 6: Canvas-First Studio and Apply Workflow
+
+**Status:** Implemented and regression-tested, including a live browser render smoke test.
 
 **Files:**
 - Modify: `packages/editor/server.ts`

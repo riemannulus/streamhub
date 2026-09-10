@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startEditorServer} from './server';
 import {PageBoard} from '../streamdeck/pages';
+import sharp from 'sharp';
 
 const original = process.env.STREAMHUB_CONFIG;
 let editor: ReturnType<typeof startEditorServer> | undefined;
@@ -111,4 +112,13 @@ test('saving preserves enabled devices and refuses external configuration edits'
   const first = editor!.stop();
   expect(editor!.stop()).toBe(first);
   await first;
+});
+
+test('v2 Studio uploads assets, autosaves a draft and applies offline without exposing host credentials',async()=>{
+  const {url,bootstrap}=await setup();const png=await sharp({create:{width:2,height:2,channels:3,background:'red'}}).png().toBuffer();
+  const uploaded=await fetch(`${url}/api/assets`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'image/png'},body:new Blob([new Uint8Array(png)])});expect(uploaded.status).toBe(200);const {assetId}=await uploaded.json() as any;
+  const document=structuredClone(bootstrap.snapshot.document);document.pages[0].appearance={background:{assetId,fit:'cover'}};
+  expect((await fetch(`${url}/api/draft`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({document})})).status).toBe(200);
+  const applied=await fetch(`${url}/api/apply`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({document,expectedVersion:bootstrap.snapshot.version})});expect(applied.status).toBe(200);expect((await applied.json() as any).runtimeStatus.connected).toBe(false);
+  expect((await fetch(`${url}/api/assets/${assetId}`)).headers.get('Content-Type')).toBe('image/png');expect(JSON.stringify(bootstrap)).not.toContain(baseConfig().adminToken);
 });

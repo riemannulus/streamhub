@@ -1,6 +1,6 @@
 # Streamhub
 
-로컬 신호 버스의 Bun 기반 첫 구현입니다. `live` 신호를 받아 보존하고, 전체 목록으로 생존 여부를 교정하며, Stream Deck MK.2에 세션 보드를 표시합니다. 종료·잠금 시 기본 대기화면으로 복귀합니다.
+로컬 신호 버스와 Stream Deck Studio입니다. Runtime이 신호·페이지·안전한 동작·전체 화면 렌더링을 소유하고, 공식 Elgato 플러그인이 15개 키에 배경과 전환을 표시합니다.
 
 ## 실행
 
@@ -124,6 +124,8 @@ bun run source:run -- bun test packages/core/src/index.test.ts
 
 ## 실제 HID 출력 진단
 
+> 아래 직접 HID 경로는 단계 7 실기기 승인 전까지 진단·회귀용으로만 남아 있습니다. 새 제품 경로는 Elgato 플러그인 방식입니다.
+
 ```sh
 bun run hid:check --list          # 연결 장치 읽기
 bun run hid:check                 # 5초간 진단 후 기본 대기화면 복귀
@@ -215,6 +217,20 @@ bun start
 [페이지·전환 설계](docs/design/pages-and-transitions.md).
 
 ## 브라우저 편집기와 시뮬레이터
+
+새 플러그인 경로를 처음 준비할 때 다음을 실행합니다.
+
+```sh
+bun run streamdeck:setup
+bun run streamdeck:plugin:build
+bun start
+# 다른 터미널
+bun run editor
+```
+
+빌드된 플러그인은 `packages/streamdeck-plugin/com.streamhub.studio.sdPlugin`이며, 포함된 Streamhub 프로필은 15개 키 전부에 캔버스 셀을 배치합니다. 실제 설치·프로필 확인은 단계 7에서 함께 진행합니다. Studio에서 페이지/대기 화면 배경, 투명 앱·URL 버튼, 아이콘, 동적 소스 영역과 페이지·잠금 해제·재연결 애니메이션을 편집하고 **장치에 적용**을 누릅니다. Runtime이 꺼져 있으면 문서를 저장하고 다음 시작 때 사용합니다.
+
+Elgato의 네이티브 전체 장치 스크린세이버는 공개 플러그인 API로 설정할 수 없습니다. Studio의 대기 화면은 플러그인이 활성 셀을 소유하는 동안 표시하는 화면이며, 네이티브 스크린세이버 이미지는 Stream Deck 앱에서 별도로 지정해야 합니다.
 
 ```sh
 bun run editor

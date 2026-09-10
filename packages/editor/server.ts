@@ -1,12 +1,17 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
+import {dirname,join} from 'node:path';
+import {readFileSync,writeFileSync} from 'node:fs';
 import { readConfig, updateConfig, validateConfig, type Config } from '../host/src/config';
 import { type PageConfig } from '../streamdeck/pages';
 import { SimulatorSession } from './simulator';
 import { checkDraft } from '../simulator/draft-check';
 import { validateSimulatorBoard } from './simulator';
+import {StudioRepository,StudioVersionConflictError} from '../studio/repository';
+import {validateStudioDocument} from '../studio/document';
+import {streamDeckClassicGeometry} from '../presentation/geometry';
 
-const LIMIT = 256 * 1024;
+const LIMIT = 9 * 1024 * 1024;
 const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
 const version = (config: Config) => createHash('sha256').update(JSON.stringify(config)).digest('hex');
 function boardOf(config: Config): PageConfig {
@@ -24,6 +29,9 @@ type Client = {session?: SimulatorSession};
 /** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
 export function startEditorServer(options: {port?: number; assetsDir?: string} = {}) {
   readConfig(true);
+  const studioDirectory=join(dirname(process.env.STREAMHUB_CONFIG??resolve('.streamhub/config.json')),'studio');
+  const repository=new StudioRepository(studioDirectory);
+  const draftPath=join(studioDirectory,'draft.json');
   const token = randomBytes(32).toString('hex');
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
   const clients = new Set<Bun.ServerWebSocket<Client>>();
@@ -53,9 +61,10 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
         return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
       }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
-        try { const config = readConfig(); return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config)}); }
+        try { const config = readConfig(),snapshot=repository.snapshot();let runtimeStatus:unknown={connected:false,message:'Runtime이 실행 중이 아닙니다.'};try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;runtimeStatus=live.runtimeStatus;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config),snapshot,draft,runtimeStatus,geometry:streamDeckClassicGeometry}); }
         catch { return json({error:'Could not read configuration'}, 500); }
       }
+      const visualAsset=/^\/api\/assets\/([a-f0-9]{64})$/.exec(url.pathname);if(visualAsset&&request.method==='GET'){try{const bytes=await repository.assets.read(visualAsset[1]);return new Response(new Blob([new Uint8Array(bytes)]),{headers:{...headers,'Content-Type':'image/png'}});}catch{return json({error:'Not found'},404);}}
       if (url.pathname === '/api/simulator') {
         const protocols = request.headers.get('sec-websocket-protocol')?.split(',').map(value => value.trim()) ?? [];
         if (request.method !== 'GET' || request.headers.get('origin') !== origin || protocols.length !== 2 || protocols[0] !== 'streamhub' || protocols[1] !== token) return json({error:'Forbidden'},403);
@@ -64,6 +73,15 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
       }
       if (url.pathname.startsWith('/api/')) {
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
+        if(url.pathname==='/api/assets'&&request.method==='POST'){
+          try{const bytes=new Uint8Array(await request.arrayBuffer());return json({assetId:await repository.putAsset(bytes)});}catch(error){return json({error:error instanceof Error?error.message:'이미지를 저장하지 못했습니다.'},400);}
+        }
+        if(url.pathname==='/api/draft'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,document=validateStudioDocument(payload.document,{sources:Object.keys(readConfig().sources)});writeFileSync(draftPath,JSON.stringify(document,null,2)+'\n',{mode:0o600});return json({document});}catch(error){return json({error:error instanceof Error?error.message:'초안을 저장하지 못했습니다.'},400);}
+        }
+        if(url.pathname==='/api/apply'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,config=readConfig(),document=validateStudioDocument(payload.document,{sources:Object.keys(config.sources)});if(typeof payload.expectedVersion!=='string')return json({error:'Invalid expectedVersion'},400);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio/apply`,{method:'POST',headers:{Authorization:`Bearer ${config.adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({document,expectedVersion:payload.expectedVersion})});if(response.ok)return json({...await response.json() as object,runtimeStatus:{connected:true}});if(response.status===409)return json({error:'다른 곳에서 변경되었습니다. 다시 불러오세요.'},409);}catch{}const saved=repository.apply(document,payload.expectedVersion);return json({...saved,runtimeStatus:{connected:false,message:'Runtime이 꺼져 있어 다음 시작 때 적용됩니다.'}});}catch(error){return error instanceof StudioVersionConflictError?json({error:error.message},409):json({error:error instanceof Error?error.message:'적용하지 못했습니다.'},400);}
+        }
         if(url.pathname==='/api/check'&&request.method==='POST'){
           if(checking)return json({error:'A check is already running'},409);
           if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
