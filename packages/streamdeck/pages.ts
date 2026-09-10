@@ -18,9 +18,20 @@ export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:
 export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>;regions?:Record<string,Record<string,DeckLayout>>};
 export type PageContext = {appBundleId:string|null;available:boolean;windowTitle?:string|null;displayId?:string|null};
 
-/** Project Studio v2 onto the proven PageBoard allocator and input state machine. */
+/** Project Studio v3 onto the proven PageBoard allocator and input state machine. */
 export function studioDocumentToPageConfig(document:StudioDocument):PageConfig{
-  return validatePageConfig({defaultPage:document.defaultPageId,pages:document.pages.map(page=>({id:page.id,title:page.title,...(page.match?{match:page.match}:{}),...(page.priority!==undefined?{priority:page.priority}:{}),buttons:page.buttons?.map(button=>({index:button.index,type:button.type,...(button.label!==undefined?{label:button.label}:{}),...(button.appearance?.color?{color:button.appearance.color}:{}),...(button.type==='page'?{pageId:button.pageId}:button.type==='open'?{url:button.url}:button.type==='app'?{bundleId:button.bundleId}:button.type==='action'?{name:button.name,args:button.args}:{})})) as PageButton[]|undefined,regions:page.dynamicRegions?.map(region=>({id:region.id,keys:region.keys,signals:region.signals}))}))});
+  const project=(button:StudioDocument['pages'][number]['buttons'] extends (infer T)[]|undefined?T:never):PageButton=>{
+    const label=button.appearance.label?.text,style=button.appearance.background?.color?{color:button.appearance.background.color}:{};
+    const common={index:button.index,...style,...(label?{label}:{})};
+    const action=button.action;
+    if(action.type==='open-app')return{...common,type:'app',bundleId:action.bundleId};
+    if(action.type==='open-url')return{...common,type:'open',url:action.url};
+    if(action.type==='registered')return{...common,type:'action',name:action.name,args:action.args};
+    if(action.type==='go-to-page')return{...common,type:'page',pageId:action.pageId};
+    if(action.type==='resume-auto-page')return{...common,type:'auto'};
+    return{index:button.index,type:'text',label:label??' ',...style};
+  };
+  return validatePageConfig({defaultPage:document.defaultPageId,pages:document.pages.map(page=>({id:page.id,title:page.title,...(page.match?{match:page.match}:{}),...(page.priority!==undefined?{priority:page.priority}:{}),buttons:page.buttons?.map(project)}))});
 }
 
 function object(value:unknown):Record<string,unknown>{

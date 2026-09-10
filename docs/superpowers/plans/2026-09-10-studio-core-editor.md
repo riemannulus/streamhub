@@ -48,7 +48,7 @@ export type StudioDocument = {
 
 `id` is a lower-case UUID generated once when the repository creates/resets the document. It provides a stable namespace for Runtime view/toggle state and is never regenerated on ordinary edits.
 
-- [ ] **Step 1: Write failing document tests**
+- [x] **Step 1: Write failing document tests**
 
 ```ts
 const button = {
@@ -66,17 +66,17 @@ expect(validateStudioDocument({...defaultStudioDocument(), pages:[{id:'home',tit
 
 Cover invalid document UUID, duplicate button IDs, duplicate indices, unknown fields, missing icon for icon modes, missing label for label modes, hidden content, invalid colors/opacities, page reference integrity, and the 32-page limit.
 
-- [ ] **Step 2: Run the document tests and confirm v2 rejects the new shape**
+- [x] **Step 2: Run the document tests and confirm v2 rejects the new shape**
 
 Run: `bun test packages/studio/document.test.ts`
 
 Expected: FAIL because v3 types and validation do not exist.
 
-- [ ] **Step 3: Implement the v3 types and strict validator**
+- [x] **Step 3: Implement the v3 types and strict validator**
 
 Use the unions and appearance fields from spec sections 5 and 6. Copy arrays/objects into a new object; never return the caller's mutable input.
 
-- [ ] **Step 4: Write the repository reset test**
+- [x] **Step 4: Write the repository reset test**
 
 ```ts
 expect(repository.snapshot().document.version).toBe(3);
@@ -84,11 +84,11 @@ expect(readdirSync(directory).some(name => /^studio\.v2\..+\.backup\.json$/.test
 expect(await repository.assets.read(existingAssetId)).toEqual(existingAssetBytes);
 ```
 
-- [ ] **Step 5: Implement one-time v2 backup and v3 initialization**
+- [x] **Step 5: Implement one-time v2 backup and v3 initialization**
 
 When `studio.json` parses as version 2, rename it to `studio.v2.<UTC compact timestamp>.backup.json`, generate one new document UUID, publish the default v3 document atomically, and return `{resetFromVersion:2, backupPath}` once in the snapshot metadata. Do not delete `assets/`.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `bun test packages/studio/document.test.ts packages/studio/repository.test.ts && bun run typecheck`
 

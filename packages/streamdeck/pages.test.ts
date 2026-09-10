@@ -229,21 +229,15 @@ test('region pin jumps aggregate pagination safely and all source lists are regi
   expect(()=>validatePageSources({defaultPage:'x',pages:[{id:'x',title:'X',signals:{sources:['a','missing']}}]},['a'])).toThrow();
 });
 
-test('Studio v2 adapter reuses stable region allocation and fixed effects',()=>{
-  const doc=defaultStudioDocument();doc.pages[0].buttons=[{index:0,type:'app',bundleId:'org.mozilla.firefox'}];doc.pages[0].dynamicRegions=[{id:'claude',keys:[1,2],signals:{source:'a'},order:'recent',overflow:'paginate',empty:'background'}];
-  const board=new PageBoard(studioDocumentToPageConfig(doc));board.update([record('one'),record('two')]);
-  expect(board.page().keys[0]).toMatchObject({type:'tile'});expect(board.page().keys[1]).toMatchObject({type:'signal',record:{id:'one'}});
+test('Studio v3 adapter projects fixed effects',()=>{
+  const doc=defaultStudioDocument();doc.pages[0].buttons=[{id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'hidden'}}];
+  const board=new PageBoard(studioDocumentToPageConfig(doc));
+  expect(board.page().keys[0]).toMatchObject({type:'tile'});
   expect(click(board,0)).toMatchObject({type:'button-effect',effect:{type:'app',bundleId:'org.mozilla.firefox'}});
 });
 
 test('Studio background-only pages do not cover the canvas with empty pagination controls',()=>{
-  const doc=defaultStudioDocument();doc.pages[0].buttons=[{index:0,type:'app',bundleId:'org.mozilla.firefox'}];
+  const doc=defaultStudioDocument();doc.pages[0].buttons=[{id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'hidden'}}];
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty' as const)]);
-});
-
-test('single-page Studio regions keep inactive global navigation transparent',()=>{
-  const doc=defaultStudioDocument();doc.pages[0].dynamicRegions=[{id:'sessions',keys:[1,2,3,4],signals:{source:'a'},order:'recent',overflow:'paginate',empty:'background'}];
-  const board=new PageBoard(studioDocumentToPageConfig(doc));board.update([record('one')]);
-  expect([board.page().keys[10].type,board.page().keys[13].type,board.page().keys[14].type]).toEqual(['empty','empty','empty']);
 });
