@@ -294,19 +294,19 @@ export type AppCatalogItem = {name:string; bundleId:string; path:string; iconPng
 export type RegisteredActionCatalogItem = {name:string; args:string[]};
 ```
 
-- [ ] **Step 1: Test catalog normalization and privacy**
+- [x] **Step 1: Test catalog normalization and privacy**
 
 Use fake Spotlight/LaunchServices output. Reject duplicate bundle IDs, NULs, relative paths, icons over 512 KiB, and fields outside the response type. Assert no environment variables or tokens appear.
 
-- [ ] **Step 2: Implement app discovery and bounded caching**
+- [x] **Step 2: Implement app discovery and bounded caching**
 
 Use a dependency-injected macOS catalog reader, sort by localized name then bundle ID, cache for 30 seconds, and limit output to 2,000 apps.
 
-- [ ] **Step 3: Implement picker delegation**
+- [x] **Step 3: Implement picker delegation**
 
 `POST /api/picker/path` accepts `{kind:'file'|'folder'}` and calls an injected native picker only from a same-origin editor request. Return one absolute path or `{cancelled:true}`; never accept a caller-supplied path as picker output.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `bun test packages/host/src/catalog.test.ts packages/editor/server.test.ts`
 

@@ -15,12 +15,12 @@ afterEach(async () => {
   if (directory) rmSync(directory, {recursive:true,force:true});
 });
 const baseConfig = () => ({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},future:{keep:true}});
-async function setup() {
+async function setup(serverOptions:Omit<Parameters<typeof startEditorServer>[0],'port'|'assetsDir'>={},config:ReturnType<typeof baseConfig>=baseConfig()) {
   directory = mkdtempSync(join(tmpdir(),'streamhub-editor-'));
   process.env.STREAMHUB_CONFIG = join(directory,'config.json');
-  writeFileSync(process.env.STREAMHUB_CONFIG, JSON.stringify(baseConfig()));
+  writeFileSync(process.env.STREAMHUB_CONFIG, JSON.stringify(config));
   writeFileSync(join(directory,'index.html'), '<html>Editor</html>');
-  editor = startEditorServer({port:0,assetsDir:directory});
+  editor = startEditorServer({port:0,assetsDir:directory,...serverOptions});
   const bootstrap = await (await fetch(`${editor.url}/api/bootstrap`)).json() as any;
   return {url:editor.url, bootstrap};
 }
@@ -131,4 +131,18 @@ test('button preview requires capability and returns shared 72px PNG composition
   const response=await fetch(`${url}/api/preview/button`,{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':bootstrap.token},body:JSON.stringify(payload)});
   expect(response.status).toBe(200);expect(response.headers.get('Content-Type')).toBe('image/png');
   expect(await sharp(await response.arrayBuffer()).metadata()).toMatchObject({width:72,height:72});
+});
+
+test('catalog and native picker APIs expose only bounded local choices',async()=>{
+  const picks:string[]=[],config={...baseConfig(),actions:{build:{exec:['/usr/bin/true','{target}'],args:{target:'[a-z]+'},sources:['demo']}}};
+  const {url,bootstrap}=await setup({appCatalog:{apps:async()=>[{name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'}]},pickPath:async(kind:'file'|'folder')=>{picks.push(kind);return kind==='file'?{path:'/tmp/file.txt'}:{cancelled:true};}},config);
+  const headers={'X-Streamhub-Editor':bootstrap.token};
+  expect(await (await fetch(`${url}/api/catalog/apps`,{headers})).json()).toEqual([{name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'}]);
+  expect(await (await fetch(`${url}/api/catalog/actions`,{headers})).json()).toEqual([{name:'build',args:['target']}]);
+  expect(JSON.stringify(await (await fetch(`${url}/api/catalog/actions`,{headers})).json())).not.toContain(config.adminToken);
+  expect((await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({kind:'file'})})).status).toBe(403);
+  const picked=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'file'})});expect(await picked.json()).toEqual({path:'/tmp/file.txt'});
+  const cancelled=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'folder'})});expect(await cancelled.json()).toEqual({cancelled:true});
+  const injected=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'file',path:'/etc/passwd'})});expect(injected.status).toBe(400);
+  expect(picks).toEqual(['file','folder']);
 });

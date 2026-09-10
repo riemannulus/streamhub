@@ -12,6 +12,8 @@ import {defaultStudioDocument,validateStudioDocument} from '../studio/document';
 import {extractKeyPngs,streamDeckClassicGeometry} from '../presentation/geometry';
 import {renderStudioBackground} from '../presentation/render';
 import {composeButton} from '../presentation/button-compositor';
+import {actionCatalog} from '../host/src/key-actions';
+import {AppCatalog,normalizeAppCatalog,normalizePickerResult,pickNativePath,type PathPickerResult} from '../host/src/catalog';
 
 const LIMIT = 9 * 1024 * 1024;
 const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
@@ -29,7 +31,7 @@ class Conflict extends Error {}
 type Client = {session?: SimulatorSession};
 
 /** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
-export function startEditorServer(options: {port?: number; assetsDir?: string} = {}) {
+export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>} = {}) {
   readConfig(true);
   const studioDirectory=join(dirname(process.env.STREAMHUB_CONFIG??resolve('.streamhub/config.json')),'studio');
   const repository=new StudioRepository(studioDirectory);
@@ -38,6 +40,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
   const clients = new Set<Bun.ServerWebSocket<Client>>();
   const reports=new Map<string,string>();
+  const appCatalog=options.appCatalog??new AppCatalog(),pickPath=options.pickPath??pickNativePath;
   let checking:Promise<unknown>|undefined;
   let stopped = false;
   let stopping: Promise<void> | undefined;
@@ -75,6 +78,17 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
       }
       if (url.pathname.startsWith('/api/')) {
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
+        if(url.pathname==='/api/catalog/apps'&&request.method==='GET'){
+          try{return json(normalizeAppCatalog(await appCatalog.apps()));}catch{return json({error:'앱 목록을 불러오지 못했습니다.'},500);}
+        }
+        if(url.pathname==='/api/catalog/actions'&&request.method==='GET'){
+          try{return json(actionCatalog(readConfig().actions??{}));}catch{return json({error:'동작 목록을 불러오지 못했습니다.'},500);}
+        }
+        if(url.pathname==='/api/picker/path'&&request.method==='POST'){
+          if(request.headers.get('origin')!==origin)return json({error:'Forbidden'},403);
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          try{const payload=await request.json() as Record<string,unknown>;if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).length!==1||(payload.kind!=='file'&&payload.kind!=='folder'))throw new Error('Invalid picker request');return json(normalizePickerResult(await pickPath(payload.kind)));}catch(error){return json({error:error instanceof Error?error.message:'경로를 선택하지 못했습니다.'},400);}
+        }
         if(url.pathname==='/api/assets'&&request.method==='POST'){
           try{const bytes=new Uint8Array(await request.arrayBuffer());return json({assetId:await repository.putAsset(bytes)});}catch(error){return json({error:error instanceof Error?error.message:'이미지를 저장하지 못했습니다.'},400);}
         }
