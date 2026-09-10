@@ -36,7 +36,7 @@
 - `FramePlan.frames` contains opaque 15-key data URI arrays and absolute offsets from playback start.
 - Later plugin code supplies a sink that calls 15 `setImage` operations concurrently.
 
-- [ ] **Step 1: Write failing metric tests**
+- [x] **Step 1: Write failing metric tests**
 
 ```ts
 test('recorder separates external warmup from Streamhub restore', () => {
@@ -49,10 +49,10 @@ test('recorder separates external warmup from Streamhub restore', () => {
 });
 ```
 
-- [ ] **Step 2: Run `bun test packages/presentation/metrics.test.ts` and confirm failure because the module does not exist**
-- [ ] **Step 3: Implement a bounded recorder that accepts only known ordered marks and returns millisecond summaries without logging tokens or payloads**
-- [ ] **Step 4: Run the focused test and confirm it passes**
-- [ ] **Step 5: Write failing playback tests for concurrent cell dispatch, skipped late intermediate frames, guaranteed final frame, and cancellation by a newer generation**
+- [x] **Step 2: Run `bun test packages/presentation/metrics.test.ts` and confirm failure because the module does not exist**
+- [x] **Step 3: Implement a bounded recorder that accepts only known ordered marks and returns millisecond summaries without logging tokens or payloads**
+- [x] **Step 4: Run the focused test and confirm it passes**
+- [x] **Step 5: Write failing playback tests for concurrent cell dispatch, skipped late intermediate frames, guaranteed final frame, and cancellation by a newer generation**
 
 ```ts
 const sent:number[]=[];
@@ -60,9 +60,9 @@ await playFramePlan(plan, async frame => { sent.push(frame.index); now += frame.
 expect(sent).toEqual([0,1,3]);
 ```
 
-- [ ] **Step 6: Implement deadline-based `playFramePlan`; never queue a late intermediate frame and always send the final frame unless aborted**
-- [ ] **Step 7: Run both focused tests, then `bun run check`**
-- [ ] **Step 8: Commit `feat(presentation): add measured deadline playback`**
+- [x] **Step 6: Implement deadline-based `playFramePlan`; never queue a late intermediate frame and always send the final frame unless aborted**
+- [x] **Step 7: Run both focused tests, then `bun run check`**
+- [x] **Step 8: Commit `feat(presentation): add measured deadline playback`**
 
 ### Task 2: StudioDocument v2 and Content-Addressed Assets
 
