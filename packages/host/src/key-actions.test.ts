@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {createKeyActionExecutor,validateButtonActions,actionCatalog} from './key-actions';
+import {createKeyActionExecutor,createKeyActionProgramExecutor,validateButtonActions,actionCatalog} from './key-actions';
 import type {PageConfig} from '../../streamdeck/pages';
 const actions={build:{exec:['/usr/bin/true','{target}'],args:{target:'[a-z]+'},sources:['demo']}};
 test('fixed button executor passes literal argv through registered bounded execution',async()=>{
@@ -38,4 +38,14 @@ test('long HTTP URLs use a scoped argument limit and URL credentials are rejecte
   const execute=createKeyActionExecutor({}, {runProcess:async()=>{calls++;return{stdout:'',stderr:'',exitCode:0};}});
   await execute({type:'open',url:'https://example.com/?q='+'x'.repeat(1500)});expect(calls).toBe(1);
   await expect(execute({type:'open',url:'https://user:password@example.com'})).rejects.toThrow();
+});
+
+test('advanced programs route each leaf through the existing bounded executor and reject navigation',async()=>{
+  const calls:string[][]=[];
+  const execute=createKeyActionProgramExecutor({}, {runProcess:async request=>{calls.push(request.argv);return{stdout:'',stderr:'',exitCode:0};}});
+  const signal=new AbortController().signal;
+  expect(await execute({type:'sequence',sequence:{mode:'sequential',steps:[{type:'action',action:{type:'open-url',url:'https://one.example/'}},{type:'action',action:{type:'open-app',bundleId:'com.apple.Finder'}}]}},signal)).toEqual({ok:true});
+  expect(calls).toEqual([['/usr/bin/open','https://one.example/'],['/usr/bin/open','-b','com.apple.Finder']]);
+  expect(await execute({type:'single',action:{type:'next-page'}},signal)).toMatchObject({ok:false,code:'presentation-action'});
+  expect(calls).toHaveLength(2);
 });

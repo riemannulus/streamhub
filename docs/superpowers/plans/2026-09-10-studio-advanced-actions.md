@@ -103,25 +103,25 @@ export async function executeProgram(
 ): Promise<ActionResult>;
 ```
 
-- [ ] **Step 1: Write failing scheduler tests with a fake clock**
+- [x] **Step 1: Write failing scheduler tests with a fake clock**
 
 Test sequential ordering, bounded delays, parallel start order, failure short-circuit for sequential, aggregate failure for parallel, abort during delay, abort during action, and no invocation after cancellation.
 
-- [ ] **Step 2: Run the focused test**
+- [x] **Step 2: Run the focused test**
 
 Run: `bun test packages/actions/composite.test.ts`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement execution without shell strings or retries**
+- [x] **Step 3: Implement execution without shell strings or retries**
 
 Sequential mode stops on the first error. Parallel mode starts each action exactly once, waits for all started actions, and returns the first result by step order. Delay uses an abortable timer. Never retry an uncertain result.
 
-- [ ] **Step 4: Route leaf actions through the M1 executor**
+- [x] **Step 4: Route leaf actions through the M1 executor**
 
 `key-actions.ts` supplies only the existing `executeButtonAction` callback. Page navigation remains a presentation intent and must not cross into the system action executor.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/actions/composite.test.ts packages/host/src/key-actions.test.ts`
 
