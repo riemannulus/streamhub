@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Actions": [
+    {
+      "Controllers": ["Keypad"],
+      "Icon": "imgs/actions/canvas/icon",
+      "Name": "Streamhub 캔버스 셀",
+      "States": [
+        {
+          "Image": "imgs/actions/canvas/key",
+          "ShowTitle": false
+        }
+      ],
+      "Tooltip": "Studio가 관리하는 전체 화면과 동적 버튼을 표시합니다.",
+      "UUID": "com.streamhub.crossfade-poc.canvas-cell"
+    }
+  ],
+  "Author": "Streamhub",
+  "Category": "Streamhub Crossfade PoC",
+  "CategoryIcon": "imgs/plugin/category",
+  "CodePath": "bin/plugin.js",
+  "Description": "Studio에서 구성한 전체 화면 배경과 동적 버튼을 15개 키에 동기화합니다.",
+  "Icon": "imgs/plugin/marketplace",
+  "Name": "Streamhub Crossfade PoC",
+  "Nodejs": {
+    "Version": "24"
+  },
+  "OS": [
+    {
+      "MinimumVersion": "13",
+      "Platform": "mac"
+    }
+  ],
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "UUID": "com.streamhub.crossfade-poc",
+  "Version": "0.1.0.0"
+}

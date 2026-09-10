@@ -1,0 +1,9 @@
+node_modules/
+com.streamhub.crossfade-poc.sdPlugin/bin/
+com.streamhub.crossfade-poc.sdPlugin/imgs/
+com.streamhub.crossfade-poc.sdPlugin/logs/
+*.streamDeckPlugin
+.studio-build/
+com.streamhub.crossfade-poc.sdPlugin/studio/frames/
+com.streamhub.crossfade-poc.sdPlugin/studio/live.json
+com.streamhub.crossfade-poc.sdPlugin/studio/settings.json

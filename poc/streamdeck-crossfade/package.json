@@ -1,0 +1,24 @@
+{
+  "name": "streamhub-streamdeck-crossfade-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "generate": "bun scripts/generate-assets.ts",
+    "build": "bun run generate && bun build src/plugin.ts --target=node --outfile=com.streamhub.crossfade-poc.sdPlugin/bin/plugin.js",
+    "check": "bun test && bun run typecheck && bun run build",
+    "studio": "bun scripts/studio.ts",
+    "link": "streamdeck link com.streamhub.crossfade-poc.sdPlugin",
+    "restart": "streamdeck restart com.streamhub.crossfade-poc"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "latest"
+  },
+  "devDependencies": {
+    "@elgato/cli": "latest",
+    "@types/node": "latest",
+    "sharp": "latest",
+    "typescript": "latest"
+  }
+}

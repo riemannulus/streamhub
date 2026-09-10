@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streamhub Studio PoC</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">▦</span><strong>Streamhub Studio</strong><span class="poc">PoC</span></div>
+    <div class="workspace-name"><span aria-hidden="true">◫</span> 작업 공간 <span aria-hidden="true">⌄</span></div>
+    <div class="top-actions"><span id="connection" class="connection"><i></i><span>Studio 연결됨</span></span><span id="save-state" role="status">동기화됨</span><button id="apply" class="apply" disabled>장치에 적용</button></div>
+  </header>
+  <div id="message" class="message" role="status" hidden></div>
+
+  <main>
+    <aside class="rail">
+      <section>
+        <div class="section-title"><h2>페이지</h2><button class="icon-button" aria-label="페이지 추가">＋</button></div>
+        <button class="page active"><span class="page-grid" aria-hidden="true">▦</span><span><strong>작업 공간</strong><small>배경 + 자동 버튼</small></span></button>
+        <button class="page"><span aria-hidden="true">▣</span><span><strong>대기 화면</strong><small>기본 화면</small></span></button>
+      </section>
+      <section class="sources">
+        <div class="section-title"><h2>데이터 연결</h2></div>
+        <div class="source"><span class="source-logo claude">✳</span><span><strong>Claude</strong><small>세션 자동 수집</small></span><i title="연결됨"></i></div>
+        <div class="source"><span class="source-logo">●</span><span><strong>GitHub</strong><small>대기 중</small></span><i class="idle" title="대기 중"></i></div>
+      </section>
+      <div class="rail-note"><strong>런타임이 자동으로 채웁니다</strong><p>Studio를 닫아도 연결과 버튼 규칙은 계속 작동합니다.</p></div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-heading"><div><p class="breadcrumb">페이지 / 작업 공간</p><h1>버튼이 놓일 화면을 만드세요</h1></div><label class="background-button">배경 바꾸기<input id="background" type="file" accept="image/png,image/jpeg,image/webp" hidden></label></div>
+      <div class="device-shell">
+        <div class="device-meta"><span>STREAM DECK · 5 × 3</span><span>전체 화면 미리보기</span></div>
+        <div id="deck" class="deck" aria-label="Stream Deck 전체 화면 미리보기"></div>
+        <div class="device-foot"><i></i></div>
+      </div>
+      <p class="canvas-help">키를 선택해 버튼 위치를 정하세요. 배경은 모든 키에 이어서 표시됩니다.</p>
+
+      <section class="rule-strip">
+        <div class="rule-title"><span class="bolt">ϟ</span><div><strong>자동 버튼 규칙</strong><small>데이터가 바뀌면 장치도 자동으로 바뀝니다</small></div></div>
+        <div class="rule-flow"><span><b>✳</b> Claude 세션 생성</span><i>›</i><span><b>＋</b> 빈 슬롯에 추가</span><i>›</i><span><b>◷</b> 완료 10분 후 제거</span></div>
+      </section>
+    </section>
+
+    <aside class="inspector">
+      <div class="inspector-title"><span class="spark">✦</span><div><h2>Firefox 버튼</h2><p>고정 버튼 · 선택한 키</p></div></div>
+      <section>
+        <label>이름<input id="label" maxlength="32" value="Firefox"></label>
+        <label>위치<select id="cell"></select></label>
+        <label>누르면 할 일<div class="read-only"><span class="firefox-mini">◉</span><span><strong>Firefox 실행</strong><small>org.mozilla.firefox</small></span></div></label>
+      </section>
+      <section>
+        <div class="control-heading"><label for="opacity">버튼 투명도</label><output id="opacity-value">68%</output></div>
+        <input id="opacity" type="range" min="10" max="100" value="68">
+        <label>페이지 전환<div class="read-only compact"><span>크로스페이드</span><strong>230ms</strong></div></label>
+      </section>
+      <section>
+        <div class="toggle-row"><span><strong>Claude 자동 버튼</strong><small>새 세션이 생기면 표시</small></span><label class="switch"><input id="claude-enabled" type="checkbox" checked><i></i></label></div>
+        <label>최대 표시 개수<input id="max-buttons" type="number" min="1" max="15" value="5"></label>
+        <label>완료 후 제거<input id="remove-after" type="number" min="1" max="1440" value="10"><span class="suffix">분</span></label>
+      </section>
+      <p class="inspector-note">이번 PoC에서는 Firefox 실행과 Claude 버튼 생성 규칙의 편집 경계를 검증합니다.</p>
+    </aside>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
