@@ -1,4 +1,13 @@
 import {validatePageConfig, type PageConfig, type PageDefinition} from '../streamdeck/pages';
+import {CONTENT_KEYS} from '../streamdeck';
+
+export function pageSignalCapacity(page:PageDefinition):{general:number;regional:number;total:number}{
+  const fixed=new Set(page.buttons?.map(button=>button.index));
+  const regionKeys=new Set(page.regions?.flatMap(region=>region.keys));
+  const general=page.signals===undefined?0:CONTENT_KEYS.filter(index=>!fixed.has(index)&&!regionKeys.has(index)).length;
+  const regional=regionKeys.size;
+  return{general,regional,total:general+regional};
+}
 
 /** Draft history intentionally accepts incomplete edits, including temporarily invalid fields. */
 export class BoardHistory {

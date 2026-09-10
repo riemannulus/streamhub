@@ -10,9 +10,11 @@ export type PageButton = ButtonStyle & (
   | {index:number;type:'open';url:string;label?:string}
   | {index:number;type:'app';bundleId:string;label?:string}
   | {index:number;type:'action';name:string;args:Record<string,string>;label?:string});
-export type PageDefinition = {id:string;title:string;match?:{appBundleId?:string;windowTitle?:{mode:'equals'|'contains';value:string};displayId?:string};priority?:number;signals?:{source?:string};buttons?:PageButton[]};
+export type SignalFilter={source?:string;sources?:string[];levels?:SessionRecord['level'][];freshness?:SessionRecord['freshness'][]};
+export type SignalRegion={id:string;keys:number[];signals:SignalFilter};
+export type PageDefinition = {id:string;title:string;match?:{appBundleId?:string;windowTitle?:{mode:'equals'|'contains';value:string};displayId?:string};priority?:number;signals?:SignalFilter;regions?:SignalRegion[];buttons?:PageButton[]};
 export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:'none'|'fade';durationMs?:number};
-export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>};
+export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>;regions?:Record<string,Record<string,DeckLayout>>};
 export type PageContext = {appBundleId:string|null;available:boolean;windowTitle?:string|null;displayId?:string|null};
 
 function object(value:unknown):Record<string,unknown>{
@@ -26,6 +28,29 @@ function text(value:unknown,max:number):string{
 }
 function id(value:unknown):string{const result=text(value,64);if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(result))throw new Error('Invalid page ID');return result;}
 
+function validateFilter(raw:unknown):SignalFilter{
+  const input=object(raw);exact(input,['source','sources','levels','freshness']);
+  if(input.source!==undefined&&input.sources!==undefined)throw new Error('Use source or sources, not both');
+  const source=(value:unknown)=>{const name=text(value,64);if(!/^[a-z0-9][a-z0-9_-]*$/.test(name))throw new Error('Invalid signal source');return name;};
+  const filter:SignalFilter={};
+  if(input.source!==undefined)filter.source=source(input.source);
+  for(const field of ['sources','levels','freshness'] as const)if(input[field]!==undefined){
+    const values=input[field];if(!Array.isArray(values)||values.length>64||new Set(values).size!==values.length)throw new Error('Invalid signal filter list');
+    if(field==='sources')filter.sources=values.map(source);
+    else if(field==='levels'){if(values.some(value=>!['info','warn','urgent'].includes(value)))throw new Error('Invalid level filter');filter.levels=values;}
+    else{if(values.some(value=>!['fresh','stale'].includes(value)))throw new Error('Invalid freshness filter');filter.freshness=values;}
+  }
+  return filter;
+}
+export function matchesSignal(record:SessionRecord,filter:SignalFilter):boolean{
+  return(filter.source===undefined||record.source===filter.source)&&(filter.sources===undefined||filter.sources.includes(record.source))&&(filter.levels===undefined||filter.levels.includes(record.level))&&(filter.freshness===undefined||filter.freshness.includes(record.freshness));
+}
+export function validatePageSources(board:PageConfig,registered:readonly string[]):void{
+  for(const page of board.pages)for(const filter of [page.signals,...(page.regions??[]).map(region=>region.signals)])if(filter){
+    for(const source of [filter.source,...(filter.sources??[])])if(source!==undefined&&!registered.includes(source))throw new Error(`Unknown signal source: ${source}`);
+  }
+}
+
 /** Data-only configuration: no executable expressions or arbitrary actions. */
 export function validatePageConfig(raw:unknown):PageConfig{
   const input=object(raw);exact(input,['defaultPage','pages','transition','durationMs']);
@@ -33,7 +58,7 @@ export function validatePageConfig(raw:unknown):PageConfig{
   if(!Array.isArray(input.pages)||input.pages.length<1||input.pages.length>32)throw new Error('Expected 1–32 pages');
   const seen=new Set<string>();
   const pages:PageDefinition[]=input.pages.map(rawPage=>{
-    const value=object(rawPage);exact(value,['id','title','match','priority','signals','buttons']);
+    const value=object(rawPage);exact(value,['id','title','match','priority','signals','regions','buttons']);
     const page:PageDefinition={id:id(value.id),title:text(value.title,80)};
     if(seen.has(page.id))throw new Error('Duplicate page ID');seen.add(page.id);
     if(value.priority!==undefined){if(!Number.isInteger(value.priority)||(value.priority as number)<-1000||(value.priority as number)>1000)throw new Error('Invalid rule priority');page.priority=value.priority as number;}
@@ -46,10 +71,7 @@ export function validatePageConfig(raw:unknown):PageConfig{
       if(match.displayId!==undefined)page.match.displayId=text(match.displayId,128);
       if(!Object.keys(page.match).length)throw new Error('Expected a page condition');
     }
-    if(value.signals!==undefined){
-      const signals=object(value.signals);exact(signals,['source']);page.signals={};
-      if(signals.source!==undefined){const source=text(signals.source,64);if(!/^[a-z0-9][a-z0-9_-]*$/.test(source))throw new Error('Invalid signal source');page.signals.source=source;}
-    }
+    if(value.signals!==undefined)page.signals=validateFilter(value.signals);
     if(value.buttons!==undefined){
       if(!Array.isArray(value.buttons)||value.buttons.length>15)throw new Error('Expected at most 15 buttons');
       const positions=new Set<number>();
@@ -72,7 +94,19 @@ export function validatePageConfig(raw:unknown):PageConfig{
         return{index,type:'auto',...style,...(label===undefined?{}:{label})};
       });
     }
-    if(page.signals && CONTENT_KEYS.every(index=>page.buttons?.some(button=>button.index===index)))throw new Error('Signals page needs an available content key');
+    const occupied=new Set(page.buttons?.map(button=>button.index));
+    if(value.regions!==undefined){
+      if(!Array.isArray(value.regions)||value.regions.length>CONTENT_KEYS.length)throw new Error('Invalid signal regions');
+      const ids=new Set<string>();
+      page.regions=value.regions.map(raw=>{
+        const region=object(raw);exact(region,['id','keys','signals']);const name=id(region.id);
+        if(ids.has(name))throw new Error('Duplicate region ID');ids.add(name);
+        if(!Array.isArray(region.keys)||!region.keys.length)throw new Error('Region needs content keys');
+        const keys=region.keys.map(key=>{if(!Number.isInteger(key)||!(CONTENT_KEYS as readonly unknown[]).includes(key)||occupied.has(key as number))throw new Error('Overlapping or invalid region key');occupied.add(key as number);return key as number;});
+        return{id:name,keys,signals:validateFilter(region.signals)};
+      });
+    }
+    if(page.signals && CONTENT_KEYS.every(index=>occupied.has(index)))throw new Error('Signals page needs an available content key');
     return page;
   });
   if(!seen.has(defaultPage))throw new Error('Unknown default page');
@@ -104,6 +138,9 @@ export function choosePage(config:PageConfig,context:PageContext):PageSelection{
 export class PageBoard{
   private readonly config:PageConfig;
   private readonly decks=new Map<string,SessionDeck>();
+  private readonly regionDecks=new Map<string,Map<string,SessionDeck>>();
+  private readonly globalPages=new Map<string,number>();
+  private regionEpoch='';
   private current:string;
   private manual=false;
   private epoch=0;
@@ -119,13 +156,14 @@ export class PageBoard{
     this.config=validatePageConfig(config);
     this.current=this.config.defaultPage;
     if(layout){
-      const saved=object(layout);exact(saved,['version','currentPage','manual','pages']);
+      const saved=object(layout);exact(saved,['version','currentPage','manual','pages','regions']);
       if(saved.version!==1||typeof saved.currentPage!=='string'||typeof saved.manual!=='boolean')throw new Error('Invalid saved page layout');
-      object(saved.pages);
+      object(saved.pages);if(saved.regions!==undefined)object(saved.regions);
       if(this.config.pages.some(page=>page.id===layout.currentPage)){this.current=layout.currentPage;this.manual=layout.manual;}
     }
     for(const page of this.config.pages){
-      const contentKeys=page.signals ? CONTENT_KEYS.filter(index=>!page.buttons?.some(button=>button.index===index)) : CONTENT_KEYS;
+      const available=CONTENT_KEYS.filter(index=>!page.buttons?.some(button=>button.index===index)&&!page.regions?.some(region=>region.keys.includes(index)));
+      const contentKeys=page.signals?available:CONTENT_KEYS;
       let saved:DeckLayout|undefined;
       if(layout&&Object.hasOwn(layout.pages,page.id)){
         const raw=layout.pages[page.id];object(raw);
@@ -135,13 +173,30 @@ export class PageBoard{
         saved.currentPage=Math.min(saved.currentPage,Math.max(0,Math.ceil(saved.slots.length/contentKeys.length)-1));
       }
       this.decks.set(page.id,new SessionDeck(saved,contentKeys));
+      const regions=new Map<string,SessionDeck>();
+      for(const region of page.regions??[]){
+        let previous:DeckLayout|undefined;
+        const layouts=layout?.regions?.[page.id];if(layouts!==undefined)object(layouts);
+        if(layouts&&Object.hasOwn(layouts,region.id)){
+          previous=new SessionDeck(layouts[region.id],[CONTENT_KEYS[0]]).exportLayout();
+          previous.currentPage=Math.min(previous.currentPage,Math.max(0,Math.ceil(previous.slots.length/region.keys.length)-1));
+        }
+        regions.set(region.id,new SessionDeck(previous,region.keys));
+      }
+      this.regionDecks.set(page.id,regions);
+      this.globalPages.set(page.id,Math.max(saved?.currentPage??0,...[...regions.values()].map(deck=>deck.page().index)));
     }
   }
   private get deck(){return this.decks.get(this.current)!;}
   private get definition(){return this.config.pages.find(page=>page.id===this.current)!;}
   update(records:readonly SessionRecord[]):void{
     for(const page of this.config.pages){
-      const visible=page.signals===undefined?[]:records.filter(record=>page.signals!.source===undefined||record.source===page.signals!.source);
+      const assigned=new Set<SessionRecord>();
+      for(const region of page.regions??[]){
+        const visible=records.filter(record=>!assigned.has(record)&&matchesSignal(record,region.signals));
+        visible.forEach(record=>assigned.add(record));this.regionDecks.get(page.id)!.get(region.id)!.update(visible);
+      }
+      const visible=page.signals===undefined?[]:records.filter(record=>!assigned.has(record)&&matchesSignal(record,page.signals!));
       this.decks.get(page.id)!.update(visible);
     }
   }
@@ -158,12 +213,39 @@ export class PageBoard{
   private route(){if(!this.manual&&this.candidate!==undefined&&this.now-this.candidateSince>=250)this.select(this.candidate);}
   private select(pageId:string){
     if(pageId===this.current)return;
-    for(const deck of this.decks.values())deck.cancelInput();
+    for(const deck of this.allDecks())deck.cancelInput();
     this.current=pageId;this.epoch++;this.innerEpoch=this.deck.page().epoch;
     this.blocked=this.held.size>0;
   }
+  private allDecks():SessionDeck[]{return[...this.decks.values(),...[...this.regionDecks.values()].flatMap(regions=>[...regions.values()])];}
+  private parts():SessionDeck[]{return[this.deck,...this.regionDecks.get(this.current)!.values()];}
+  private composedPage():DeckPage{
+    if(!this.definition.regions?.length)return this.deck.page();
+    const parts=this.parts(),count=Math.max(...parts.map(deck=>deck.page().pageCount));
+    const index=Math.min(this.globalPages.get(this.current)??0,count-1);this.globalPages.set(this.current,index);
+    const frames=parts.map(deck=>deck.page(index)),frame=frames[0];
+    const epochs=JSON.stringify([this.current,...frames.map(frame=>frame.epoch)]);
+    if(epochs!==this.regionEpoch){this.regionEpoch=epochs;this.epoch++;this.blocked=this.held.size>0;}
+    for(const [i,region] of this.definition.regions.entries())for(const key of region.keys)frame.keys[key]=frames[i+1].keys[key];
+    const urgency=(physical:number)=>frames.reduce((sum,frame)=>{const key=frame.keys[physical];return sum+((key.type==='previous'||key.type==='next')?key.urgentCount:0);},0);
+    frame.keys[10]={type:'previous',index:10,enabled:index>0,urgentCount:urgency(10)};
+    frame.keys[14]={type:'next',index:14,enabled:index<count-1,urgentCount:urgency(14)};
+    const pins=frames.map(frame=>frame.keys[13]).filter((key):key is Extract<DeckKey,{type:'pin'}>=>key.type==='pin'&&!!key.record);
+    if(pins.length)frame.keys[13]={...pins[0],hiddenCount:pins.reduce((sum,key)=>sum+key.hiddenCount+1,0)-1};
+    return{...frame,index,pageCount:count};
+  }
+  private inputDeck(index:number):SessionDeck{
+    const region=this.definition.regions?.find(region=>region.keys.includes(index));
+    if(region)return this.regionDecks.get(this.current)!.get(region.id)!;
+    if(index===13&&this.definition.regions?.length){
+      const pin=this.composedPage().keys[13];
+      if(pin.type==='pin'&&pin.record)return this.parts().find(deck=>{const key=deck.page().keys[13];return key.type==='pin'&&key.record?.id===pin.record!.id&&key.record?.source===pin.record!.source;})??this.deck;
+    }
+    return this.deck;
+  }
+  private navigateRegions(index:number):void{this.globalPages.set(this.current,index);this.composedPage();}
   page():DeckPage{
-    const frame=this.deck.page();
+    const frame=this.composedPage();
     if(frame.epoch!==this.innerEpoch){this.innerEpoch=frame.epoch;this.epoch++;this.blocked=this.held.size>0;}
     for(const button of this.definition.buttons??[]){
       let key:DeckKey;
@@ -184,12 +266,12 @@ export class PageBoard{
     const frame=this.page();
     if(this.actionStatus.get(JSON.stringify([this.current,index]))?.status==='running')return;
     this.held.set(index,{epoch:this.blocked?-1:frame.epoch,cell:frame.keys[index]!});
-    if(!this.definition.buttons?.some(button=>button.index===index))this.deck.down(index);
+    if(!this.definition.buttons?.some(button=>button.index===index)&&!(this.definition.regions?.length&&(index===10||index===14)))this.inputDeck(index).down(index);
   }
   up(index:number):PressIntent|undefined{
     const frame=this.page(),binding=this.held.get(index),blocked=this.blocked;
     this.held.delete(index);if(!this.held.size)this.blocked=false;
-    if(blocked||!binding||binding.epoch!==frame.epoch||JSON.stringify(binding.cell)!==JSON.stringify(frame.keys[index])){this.deck.cancelInput(index);return;}
+    if(blocked||!binding||binding.epoch!==frame.epoch||JSON.stringify(binding.cell)!==JSON.stringify(frame.keys[index])){for(const deck of this.parts())deck.cancelInput(index);return;}
     const button=this.definition.buttons?.find(button=>button.index===index);
     if(button){
       if(button.type==='text')return;
@@ -202,7 +284,12 @@ export class PageBoard{
       else{this.manual=false;this.route();}
       return{type:'navigate',page:this.page().index};
     }
-    const intent=this.deck.up(index);this.page();return intent;
+    if(this.definition.regions?.length&&(index===10||index===14)){
+      const key=frame.keys[index];if((key.type==='previous'||key.type==='next')&&key.enabled){this.navigateRegions(frame.index+(index===10?-1:1));return{type:'navigate',page:this.page().index};}return;
+    }
+    const intent=this.inputDeck(index).up(index);
+    if(this.definition.regions?.length&&intent?.type==='navigate')this.navigateRegions(intent.page);
+    this.page();return intent;
   }
   setActionStatus(pageId:string,index:number,status:'running'|'success'|'error',message?:string):void{
     const button=this.config.pages.find(page=>page.id===pageId)?.buttons?.find(button=>button.index===index);
@@ -212,10 +299,10 @@ export class PageBoard{
   }
   cancelInput(index?:number):void{
     if(index===undefined)this.held.clear();else this.held.delete(index);
-    for(const deck of this.decks.values())deck.cancelInput(index);
+    for(const deck of this.allDecks())deck.cancelInput(index);
     if(!this.held.size)this.blocked=false;
   }
   exportLayout():PageBoardLayout{
-    return{version:1,currentPage:this.current,manual:this.manual,pages:Object.fromEntries([...this.decks].map(([id,deck])=>[id,deck.exportLayout()]))};
+    return{version:1,currentPage:this.current,manual:this.manual,pages:Object.fromEntries([...this.decks].map(([id,deck])=>[id,deck.exportLayout()])),...(this.config.pages.some(page=>page.regions?.length)?{regions:Object.fromEntries([...this.regionDecks].filter(([,regions])=>regions.size).map(([page,regions])=>[page,Object.fromEntries([...regions].map(([id,deck])=>[id,deck.exportLayout()]))]))}:{})};
   }
 }

@@ -1,16 +1,16 @@
-import { validatePageConfig, type PageConfig } from '../streamdeck/pages';
+import { validatePageSources, validatePageConfig, type PageConfig } from '../streamdeck/pages';
 import {startSimulation, type SimulationHost, type SimulationEvent} from '../simulator/host';
 
 export type SimulatorEvent =
   | {type:'action';status:string;effect:unknown;message?:string}
   | { type:'key'; index:number; rgb:string }
   | { type:'standby' }
-  | { type:'state'; pageId:string; manual:boolean; locked:boolean; inputEnabled:boolean; latencyMs:number; frames:number; keysSent:number; lastFrameMs:number; selectionReason?:string }
+  | { type:'state'; pageId:string; manual:boolean; locked:boolean; inputEnabled:boolean; latencyMs:number; frames:number; keysSent:number; lastFrameMs:number; selectionReason?:string; records?:unknown[] }
   | { type:'error'; message:string };
 
 export function validateSimulatorBoard(raw:unknown,sources:readonly string[]):PageConfig {
   const board=validatePageConfig(raw);
-  for(const page of board.pages)if(page.signals?.source && !sources.includes(page.signals.source))throw new Error(`Unknown signal source: ${page.signals.source}`);
+  validatePageSources(board,[...sources]);
   return board;
 }
 const object=(raw:unknown):Record<string,unknown>=>{
@@ -71,9 +71,9 @@ export class SimulatorSession {
     if(this.stopped||!this.host||this.polling)return;
     this.polling=true;
     try{
-      const {display}=await this.host.state();
+      const {display,records}=await this.host.state();
       const event:SimulatorEvent={type:'state',pageId:display.pageId??'',manual:display.manual??false,locked:this.locked,inputEnabled:display.inputEnabled,
-        latencyMs:this.latencyMs,frames:this.frames,keysSent:this.keysSent,lastFrameMs:this.lastFrameMs,selectionReason:display.selectionReason};
+        latencyMs:this.latencyMs,frames:this.frames,keysSent:this.keysSent,lastFrameMs:this.lastFrameMs,selectionReason:display.selectionReason,records};
       const serialized=JSON.stringify(event);
       if(serialized!==this.lastState){this.lastState=serialized;this.send(event);}
     }catch{if(!this.stopped)this.send({type:'error',message:'Could not read simulator state'});}
@@ -99,6 +99,9 @@ export class SimulatorSession {
         case 'lock':
           if(typeof command.locked!=='boolean')throw new Error('Invalid lock state');
           this.locked=command.locked;host.setSession(!this.locked);break;
+        case 'signal-upsert':{if(typeof command.source!=='string'||typeof command.id!=='string'||typeof command.label!=='string'||!['info','warn','urgent'].includes(command.level as string))throw new Error('Invalid signal');await host.upsert({id:command.id,label:command.label,level:command.level as 'info'|'warn'|'urgent'},undefined,command.source);break;}
+        case 'signal-remove':if(typeof command.source!=='string'||typeof command.id!=='string')throw new Error('Invalid signal');await host.remove(command.id,undefined,command.source);break;
+        case 'source-stale':if(typeof command.source!=='string')throw new Error('Invalid source');host.markSourceStale(command.source);break;
         case 'action-result':if(command.result!=='success'&&command.result!=='error')throw new Error('Invalid action result');host.setActionResult(command.result);break;
         case 'latency':this.latencyMs=integer(command.ms,0,100);host.setLatency(this.latencyMs);break;
         case 'signals':await host.replaceSignals(sampleSignals(integer(command.count,0,48),this.sources));break;

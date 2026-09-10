@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
 import {BoardHistory,createTemplate,duplicatePage,movePage} from './editing';
+import * as editing from './editing';
 import {validatePageConfig,type PageConfig} from '../streamdeck/pages';
 const initial=():PageConfig=>({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'page',pageId:'home'}]},{id:'work',title:'Work',signals:{}}]});
 
@@ -58,4 +59,12 @@ test('templates validate source filters and preserve pagination controls and pag
   expect(()=>createTemplate(initial(),'source','bad source')).toThrow();
   let board=initial();while(board.pages.length<32)board=createTemplate(board,'all').board;
   expect(()=>createTemplate(board,'tools')).toThrow();expect(()=>duplicatePage(board,'home')).toThrow();
+});
+test('capacity separates general and regional signal keys without double counting',()=>{
+  const capacity=(editing as typeof editing&{pageSignalCapacity?:(page:PageConfig['pages'][number])=>unknown}).pageSignalCapacity;
+  const page:PageConfig['pages'][number]={id:'work',title:'Work',signals:{},buttons:[{index:0,type:'text',label:'Fixed'}],regions:[
+    {id:'build',keys:[1,2],signals:{source:'build'}},{id:'alerts',keys:[3],signals:{levels:['urgent']}},
+  ]};
+  expect(capacity?.(page)).toEqual({general:8,regional:3,total:11});
+  expect(capacity?.({...page,signals:undefined})).toEqual({general:0,regional:3,total:3});
 });

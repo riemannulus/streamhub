@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {PageBoard,validatePageConfig,type PageConfig} from './pages';
+import {PageBoard,validatePageConfig,validatePageSources,type PageConfig} from './pages';
 import {SessionDeck,type SessionRecord} from './index';
 const record=(id:string,source='a'):SessionRecord=>({id,source,kind:'live',level:'info',label:id,revision:1,createdAt:1,updatedAt:1,freshness:'fresh',press:{type:'open',url:'https://example.com'}});
 const config:PageConfig={defaultPage:'home',transition:'fade',durationMs:150,pages:[
@@ -190,4 +190,40 @@ test('action buttons emit one safe intent and remain gated while running',()=>{
   expect(click(board,2)).toMatchObject({effect:{type:'action',name:'build',args:{target:'test'}}});
   board.setActionStatus('home',2,'error','실행 실패');expect(board.page().keys[2]).toMatchObject({foot:'실행 실패'});
   for(const button of [{type:'open',url:'file:///tmp/x'},{type:'open',url:'https://user:pass@example.com'},{type:'app',bundleId:'x;rm'},{type:'action',name:'build',args:{x:1}},{type:'action',name:'build',args:{},exec:['sh']}])expect(()=>validatePageConfig({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,...button}]}]})).toThrow();
+});
+
+test('regions retain independent slots and aggregate pagination exposes every filtered record',()=>{
+  const cfg:PageConfig={defaultPage:'home',pages:[{id:'home',title:'Home',signals:{sources:['a','b'],levels:['info'],freshness:['fresh']},regions:[
+    {id:'alpha',keys:[0,1],signals:{source:'a'}},{id:'beta',keys:[2],signals:{sources:['a','b']}},
+  ]}]};
+  const board=new PageBoard(cfg),records=[...Array.from({length:5},(_,i)=>record(`a${i}`,'a')),...Array.from({length:3},(_,i)=>record(`b${i}`,'b'))];
+  board.update(records);expect(board.page().pageCount).toBe(3);
+  const seen=new Set<string>();
+  for(let i=0;i<3;i++){for(const key of board.page().keys)if(key.type==='signal')seen.add(key.record.id);if(i<2)click(board,14);}
+  expect([...seen].sort()).toEqual(records.map(r=>r.id).sort());
+  const restored=new PageBoard(cfg,board.exportLayout());restored.update(records);expect(restored.page().index).toBe(2);
+  click(board,10);click(board,10);board.update(records.filter(r=>r.id!=='a0'));
+  expect(board.page().keys[0]).toMatchObject({type:'empty'});expect(board.page().keys[1]).toMatchObject({type:'signal',record:{id:'a1'}});
+  board.down(2);board.update(records.map(r=>r.id==='b0'?{...r,revision:2}:r));expect(board.up(2)).toBeUndefined();
+  expect(click(board,2)).toMatchObject({type:'effect',key:{source:'b',id:'b0'}});
+});
+
+test('filters and regions reject overlap and invalid values',()=>{
+  for(const signals of [{source:'a',sources:['b']},{levels:['debug']},{freshness:['expired']},{sources:['a','a']}])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',signals}]})).toThrow();
+  for(const regions of [[{id:'a',keys:[10],signals:{}}],[{id:'a',keys:[],signals:{}}],[{id:'a',keys:[0],signals:{}},{id:'b',keys:[0],signals:{}}]])expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',regions}]})).toThrow();
+  expect(()=>validatePageConfig({defaultPage:'x',pages:[{id:'x',title:'X',buttons:[{type:'text',index:0,label:'Fixed'}],regions:[{id:'a',keys:[0],signals:{}}]}]})).toThrow();
+  const board=new PageBoard({defaultPage:'x',pages:[{id:'x',title:'X',signals:{sources:['a','b'],levels:['urgent'],freshness:['stale']}}]});
+  board.update([record('a'),{...record('b','b'),level:'urgent',freshness:'stale'},{...record('c','c'),level:'urgent',freshness:'stale'}]);
+  expect(board.page().keys.flatMap(k=>k.type==='signal'?[k.record.id]:[])).toEqual(['b']);
+  const empty=new PageBoard({defaultPage:'x',pages:[{id:'x',title:'X',signals:{sources:[]}}]});empty.update([record('a')]);expect(empty.page().keys[0].type).toBe('empty');
+});
+
+test('region pin jumps aggregate pagination safely and all source lists are registered',()=>{
+  const cfg:PageConfig={defaultPage:'home',pages:[{id:'home',title:'Home',regions:[{id:'urgent',keys:[0],signals:{sources:['a']}}]}]};
+  const board=new PageBoard(cfg);board.update([record('first'),record('second'),{...record('third'),level:'urgent'}]);
+  expect(board.page().keys[13]).toMatchObject({type:'pin',record:{id:'third'}});
+  expect(click(board,13)).toMatchObject({type:'navigate',page:2,highlight:{source:'a',id:'third'}});
+  expect(board.page().keys[0]).toMatchObject({type:'signal',record:{id:'third'}});
+  expect(()=>validatePageSources(cfg,['a'])).not.toThrow();expect(()=>validatePageSources(cfg,['b'])).toThrow();
+  expect(()=>validatePageSources({defaultPage:'x',pages:[{id:'x',title:'X',signals:{sources:['a','missing']}}]},['a'])).toThrow();
 });

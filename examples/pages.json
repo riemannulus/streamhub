@@ -6,7 +6,18 @@
     {
       "id": "home",
       "title": "홈",
-      "signals": {},
+      "signals": {
+        "sources": ["demo"],
+        "levels": ["info", "warn", "urgent"],
+        "freshness": ["fresh", "stale"]
+      },
+      "regions": [
+        {
+          "id": "urgent-demo",
+          "keys": [0, 1, 2],
+          "signals": { "source": "demo", "levels": ["urgent"] }
+        }
+      ],
       "buttons": [
         { "index": 12, "type": "page", "pageId": "terminal", "label": "터미널" },
         { "index": 13, "type": "auto", "label": "자동" }

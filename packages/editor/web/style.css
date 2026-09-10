@@ -3,3 +3,5 @@
 .button-row{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.button-row button{font-size:11px;padding:6px 8px}.preview-heading{flex-wrap:wrap}.header-actions{flex-wrap:wrap}.key.fixed{border-color:#7692c5}.key.reserved:not(.fixed){border-color:#66766b}header{height:auto;min-height:91px;padding-top:15px;padding-bottom:15px}
 
 textarea{display:block;width:100%;margin-top:7px;border:1px solid #d7dee8;border-radius:6px;padding:8px;font:12px monospace;resize:vertical}
+
+select[multiple]{min-height:75px}.region-row{border:1px solid #dce2e9;border-radius:6px;padding:10px;margin:10px 0}.region-row strong{font-size:12px;display:block;margin-bottom:12px}.region-row button{font-size:11px}.deck-status{flex-wrap:wrap;overflow-wrap:anywhere}#runtime-state{max-width:75%}

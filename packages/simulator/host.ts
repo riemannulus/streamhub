@@ -4,13 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHost, type HostRuntime } from '../host/src/runtime';
 import { startServer } from '../host/src/server';
+import { SignalStore } from '../host/src/store';
 import { ActionRegistry } from '../host/src/actions';
 import { parseLive } from '../host/src/validation';
 import { startDisplay } from '../host/src/display';
 import type { SessionState } from '../host/src/session-monitor';
 import type { ApplicationContext } from '../host/src/app-context';
 import { HidDisplay } from '../streamdeck/hid';
-import { validatePageConfig, type PageConfig } from '../streamdeck/pages';
+import { validatePageSources, validatePageConfig, type PageConfig } from '../streamdeck/pages';
 import type { ButtonEffect, DeckPage, SessionRecord } from '../streamdeck';
 
 type EventBody =
@@ -33,7 +34,7 @@ export type SimulationHost={
   state():Promise<SimulationState>;key(index:number,edge:'down'|'up'):void;
   setSession(active:boolean):void;setContext(appBundleId:string|null,available?:boolean,details?:{windowTitle?:string|null;displayId?:string|null}):void;
   applyDraft(board:PageConfig,selectedPage?:string):Promise<void>;selectPage(pageId:string):Promise<void>;auto():Promise<void>;
-  setActionResult(result:'success'|'error'):void;setLatency(ms:number):void;replaceSignals(records:SimulationSignal[]):Promise<void>;
+  markSourceStale(source:string):void;setActionResult(result:'success'|'error'):void;setLatency(ms:number):void;replaceSignals(records:SimulationSignal[]):Promise<void>;
   snapshot():SimulationSnapshot;restart():Promise<void>;stop():Promise<void>;
 };
 export const defaultSimulationBoard:PageConfig={defaultPage:'home',transition:'fade',durationMs:250,pages:[
@@ -48,7 +49,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   const sources=Object.fromEntries(sourceNames.map(source=>[source,{token:randomUUID()+randomUUID()}]));
   const validateBoard=(input:PageConfig)=>{
     const result=validatePageConfig(input);
-    if(result.pages.some(page=>page.signals?.source&&!Object.hasOwn(sources,page.signals.source)))throw new Error('Unknown signal source');
+    validatePageSources(result,sourceNames);
     return result;
   };
   let board=validateBoard(options.board??defaultSimulationBoard);
@@ -59,6 +60,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   const directory=await mkdtemp(join(tmpdir(),'streamhub-simulator-'));
   const adminToken=randomUUID()+randomUUID();
   const started=performance.now(),events:SimulationEvent[]=[];
+  let signalStore:SignalStore|undefined;
   let display:Awaited<ReturnType<typeof startDisplay>>|undefined;
   let runtime:HostRuntime|undefined,generation=0,standby=true,pixels:(Buffer|null)[]=Array(15).fill(null);
   let session:SessionState={active:true,reason:'active'},context:ApplicationContext={appBundleId:null,available:true};
@@ -75,7 +77,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   function mockActions(){const definitions:Record<string,{exec:string[];args:Record<string,string>;sources:string[]}>=Object.create(null);for(const page of board.pages)for(const button of page.buttons??[])if(button.type==='action'){const names=Object.keys(button.args);definitions[button.name]={exec:['/usr/bin/true',...names.map(name=>`{${name}}`)],args:Object.fromEntries(names.map(name=>[name,'.*'])),sources:sourceNames};}return definitions;}
   async function boot(){
     runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),streamdeck:{enabled:true,board}},directory,{
-      dependencies:{serve:options=>startServer({...options,port:0}),display:async(store,path,displayOptions)=>display=await startDisplay(store,path,{
+      dependencies:{openStore:path=>signalStore=new SignalStore(path),serve:options=>startServer({...options,port:0}),display:async(store,path,displayOptions)=>display=await startDisplay(store,path,{
         ...displayOptions,pollMs,
         execute:async(effect,signal)=>{const result=actionResult;emit({type:'effect',effect,status:'running'});await new Promise<void>((resolve,reject)=>{if(signal?.aborted){reject(new Error('Cancelled'));return;}const abort=()=>{clearTimeout(timer);reject(new Error('Cancelled'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},100);signal?.addEventListener('abort',abort,{once:true});});emit({type:'effect',effect,status:result,...(result==='error'?{message:'모의 실행 실패'}:{})});if(result==='error')throw new Error('모의 실행 실패');},
         monitor:async callback=>{sessionCallback=callback;callback({...session});return{stop:async()=>{if(sessionCallback===callback)sessionCallback=undefined;}};},
@@ -121,6 +123,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
     async applyDraft(input,selectedPage){running();const next=validateBoard(input);display!.applyDraft(next,selectedPage);board=next;},
     async selectPage(pageId){running();display!.selectPage(pageId);},
     async auto(){running();display!.auto();},
+    markSourceStale(source){running();sourceAuth(source);signalStore!.apply({op:'markStale',source});},
     setActionResult(result){if(result!=='success'&&result!=='error')throw new Error('Invalid action result');actionResult=result;},
     setLatency(ms){running();if(!Number.isFinite(ms)||ms<0||ms>100)throw new Error('Latency must be between 0 and 100 ms');latency=ms;},
     async replaceSignals(records){

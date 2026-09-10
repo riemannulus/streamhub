@@ -129,3 +129,18 @@ test('immediate stop and queued commands cannot leak a host or callbacks',async(
   await first;expect((await pending)?.message).toContain('stopped');
   const count=events.length;await Bun.sleep(80);expect(events).toHaveLength(count);
 });
+test('signal editor commands use source-scoped lifecycle state',async()=>{
+  const {sim,state}=fixture();
+  const records=()=>state()?.records as Array<{source:string;id:string;label:string;level:string;freshness:string}>|undefined;
+  try{
+    await waitFor(()=>state()?.inputEnabled);
+    await sim.command({type:'signal-upsert',source:'demo',id:'manual',label:'직접 추가',level:'urgent'});
+    expect(records()?.find(record=>record.id==='manual')).toMatchObject({source:'demo',label:'직접 추가',level:'urgent',freshness:'fresh'});
+    await sim.command({type:'source-stale',source:'demo'});
+    expect(records()?.find(record=>record.id==='manual')?.freshness).toBe('stale');
+    await expect(sim.command({type:'signal-upsert',source:'missing',id:'manual',label:'잘못된 소스',level:'info'})).rejects.toThrow('Unknown signal source');
+    expect(records()?.some(record=>record.label==='잘못된 소스')).toBe(false);
+    await sim.command({type:'signal-remove',source:'demo',id:'manual'});
+    expect(records()?.some(record=>record.id==='manual')).toBe(false);
+  }finally{await sim.stop();}
+});

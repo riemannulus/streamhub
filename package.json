@@ -9,6 +9,8 @@
     "start": "bun packages/host/src/main.ts",
     "editor": "bun scripts/editor.ts",
     "simulator:check": "bun scripts/simulator-check.ts",
+    "source:register": "bun scripts/register-command-source.ts",
+    "source:run": "bun scripts/run-command-source.ts",
     "streamdeck:register": "bun scripts/register-streamdeck.ts",
     "demo": "bun scripts/demo.ts",
     "check": "bun run typecheck && bun test",
