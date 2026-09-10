@@ -11,7 +11,7 @@ export class StudioState{
   apps:AppCatalogItem[]=[];
   actions:RegisteredActionItem[]=[];
   runtimeStatus:Bootstrap['runtimeStatus'];
-  private draftTimer?:ReturnType<typeof setTimeout>;
+  private draftQueue:Promise<void>=Promise.resolve();
   private constructor(private readonly request:typeof fetch,private readonly token:string,private version:string,readonly geometry:Geometry,bootstrap:Bootstrap){this.model=new StudioModel(bootstrap.draft??bootstrap.snapshot.document);this.runtimeStatus=bootstrap.runtimeStatus;}
   static async connect(request:typeof fetch=fetch):Promise<StudioState>{
     const response=await request('/api/bootstrap');const bootstrap=await response.json() as Bootstrap;if(!response.ok)throw new Error('Studio를 불러오지 못했습니다.');
@@ -21,10 +21,10 @@ export class StudioState{
     if(apps.ok)state.apps=await apps.json() as AppCatalogItem[];if(actions.ok)state.actions=await actions.json() as RegisteredActionItem[];
     return state;
   }
-  changed():void{clearTimeout(this.draftTimer);this.draftTimer=setTimeout(()=>{void this.saveDraft();},350);}
+  changed():void{this.draftQueue=this.draftQueue.then(()=>this.saveDraft()).catch(()=>{});}
   private async saveDraft():Promise<void>{const response=await this.request('/api/draft',{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':this.token},body:JSON.stringify({document:this.model.document})});if(!response.ok)throw new Error((await response.json() as {error:string}).error);}
   async apply():Promise<void>{
-    clearTimeout(this.draftTimer);const response=await this.request('/api/apply',{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':this.token},body:JSON.stringify({document:this.model.document,expectedVersion:this.version})}),body=await response.json() as {error?:string;version?:string;runtimeStatus?:Bootstrap['runtimeStatus']};
+    await this.draftQueue;const response=await this.request('/api/apply',{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':this.token},body:JSON.stringify({document:this.model.document,expectedVersion:this.version})}),body=await response.json() as {error?:string;version?:string;runtimeStatus?:Bootstrap['runtimeStatus']};
     if(!response.ok)throw new Error(body.error??'장치에 적용하지 못했습니다.');this.version=body.version!;this.runtimeStatus=body.runtimeStatus??this.runtimeStatus;this.model.markApplied();
   }
   async upload(file:File):Promise<string>{const response=await this.request('/api/assets',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':file.type||'application/octet-stream'},body:file}),body=await response.json() as {assetId?:string;error?:string};if(!response.ok)throw new Error(body.error??'이미지를 저장하지 못했습니다.');return body.assetId!;}

@@ -24,3 +24,11 @@ test('page command wrappers create one history entry and keep selection determin
   model.undo();expect(model.document.pages.some(page=>page.id==='web-copy')).toBe(true);
   expect(model.selectedPageId).toBe('web-copy');
 });
+
+test('button gestures create one undo entry, preserve selection and branch history',()=>{
+  const document=defaultStudioDocument();document.pages.push({id:'web',title:'Web'});document.pages[0].buttons=[{id:'one',index:0,action:{type:'none'},appearance:{contentMode:'hidden'}}];const model=new StudioModel(document);
+  model.selectKey(0);model.copyButton();model.selectPage('web');model.selectKey(3);model.pasteButton();expect(model.document.pages[1].buttons?.[0].index).toBe(3);
+  model.undo();expect(model.document.pages[1].buttons).toBeUndefined();expect(model.selectedPageId).toBe('web');expect(model.selectedKey).toBe(3);
+  model.redo();expect(model.document.pages[1].buttons).toHaveLength(1);
+  model.undo();model.selectPage('home');model.selectKey(0);model.duplicateButton(2);expect(model.document.pages[0].buttons).toHaveLength(2);model.undo();expect(model.document.pages[0].buttons).toHaveLength(1);model.redo();expect(model.document.pages[0].buttons).toHaveLength(2);
+});

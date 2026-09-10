@@ -378,11 +378,11 @@ Commit: `feat(studio): build core action authoring interface`
 - Produces `moveButton`, `copyButton`, `pasteButton`, `duplicateButton`, `removeButton` as one-command undo entries.
 - Clipboard stores one structured-cloned button without index; paste assigns a fresh ID and target index.
 
-- [ ] **Step 1: Write failing collision and history tests**
+- [x] **Step 1: Write failing collision and history tests**
 
 Cover blank→occupied move, occupied→occupied swap confirmation rejection, cross-page paste, fresh ID, missing asset preservation, undo/redo branch, and keyboard shortcuts that ignore focused text inputs.
 
-- [ ] **Step 2: Implement pure clipboard transforms**
+- [x] **Step 2: Implement pure clipboard transforms**
 
 ```ts
 type ButtonClipboard = {version:1; button:Omit<ButtonDefinition,'id'|'index'>};
@@ -390,11 +390,11 @@ type ButtonClipboard = {version:1; button:Omit<ButtonDefinition,'id'|'index'>};
 
 Clipboard data stays in Studio memory; do not write button JSON to the system clipboard.
 
-- [ ] **Step 3: Add pointer drag/drop and keyboard commands**
+- [x] **Step 3: Add pointer drag/drop and keyboard commands**
 
 Support `⌘C`, `⌘V`, `⌘D`, Delete, `⌘Z`, and `⇧⌘Z`. Every successful gesture creates exactly one history entry and one autosaved draft.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `bun test packages/editor/web/clipboard.test.ts packages/editor/web/model.test.ts`
 
