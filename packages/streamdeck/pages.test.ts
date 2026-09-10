@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {PageBoard,studioDocumentToPageConfig,validatePageConfig,validatePageSources,type PageConfig} from './pages';
-import {defaultStudioDocument} from '../studio/document';
+import {defaultStudioDocument,singlePressBehavior} from '../studio/document';
 import {SessionDeck,type SessionRecord} from './index';
 const record=(id:string,source='a'):SessionRecord=>({id,source,kind:'live',level:'info',label:id,revision:1,createdAt:1,updatedAt:1,freshness:'fresh',press:{type:'open',url:'https://example.com'}});
 const config:PageConfig={defaultPage:'home',transition:'fade',durationMs:150,pages:[
@@ -231,13 +231,13 @@ test('region pin jumps aggregate pagination safely and all source lists are regi
 
 test('Studio v3 adapter projects fixed effects',()=>{
   const hidden={contentMode:'hidden' as const},doc=defaultStudioDocument();doc.pages[0].buttons=[
-    {id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:hidden},
-    {id:'path',index:1,action:{type:'open-path',path:'/tmp/example'},appearance:hidden},
-    {id:'url',index:2,action:{type:'open-url',url:'https://example.com',browserBundleId:'org.mozilla.firefox'},appearance:hidden},
-    {id:'hotkey',index:3,action:{type:'hotkey',keys:['command','k']},appearance:hidden},
-    {id:'text',index:4,action:{type:'text',text:'hello',mode:'type'},appearance:hidden},
-    {id:'media',index:5,action:{type:'media',command:'play-pause'},appearance:hidden},
-    {id:'registered',index:6,action:{type:'registered',name:'build',args:{target:'app'}},appearance:hidden},
+    {id:'firefox',index:0,behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance:hidden},
+    {id:'path',index:1,behavior:singlePressBehavior({type:'open-path',path:'/tmp/example'}),appearance:hidden},
+    {id:'url',index:2,behavior:singlePressBehavior({type:'open-url',url:'https://example.com',browserBundleId:'org.mozilla.firefox'}),appearance:hidden},
+    {id:'hotkey',index:3,behavior:singlePressBehavior({type:'hotkey',keys:['command','k']}),appearance:hidden},
+    {id:'text',index:4,behavior:singlePressBehavior({type:'text',text:'hello',mode:'type'}),appearance:hidden},
+    {id:'media',index:5,behavior:singlePressBehavior({type:'media',command:'play-pause'}),appearance:hidden},
+    {id:'registered',index:6,behavior:singlePressBehavior({type:'registered',name:'build',args:{target:'app'}}),appearance:hidden},
   ];
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys[0]).toMatchObject({type:'tile'});
@@ -251,18 +251,18 @@ test('Studio v3 adapter projects fixed effects',()=>{
 });
 
 test('Studio background-only pages do not cover the canvas with empty pagination controls',()=>{
-  const doc=defaultStudioDocument();doc.pages[0].buttons=[{id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'hidden'}}];
+  const doc=defaultStudioDocument();doc.pages[0].buttons=[{id:'firefox',index:0,behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance:{contentMode:'hidden'}}];
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty' as const)]);
 });
 
 test('Studio v3 navigation actions move outer pages, pin manual selection and render an indicator',()=>{
   const navigation=(prefix:string)=>[
-    {id:`${prefix}-previous`,index:10,action:{type:'previous-page' as const},appearance:{contentMode:'hidden' as const}},
-    {id:`${prefix}-next`,index:11,action:{type:'next-page' as const},appearance:{contentMode:'hidden' as const}},
-    {id:`${prefix}-media`,index:12,action:{type:'go-to-page' as const,pageId:'media'},appearance:{contentMode:'hidden' as const}},
-    {id:`${prefix}-indicator`,index:13,action:{type:'page-indicator' as const},appearance:{contentMode:'label-only' as const,label:{text:'0 / 0',position:'center' as const,size:'medium' as const,color:'#ffffff'}}},
-    {id:`${prefix}-auto`,index:14,action:{type:'resume-auto-page' as const},appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-previous`,index:10,behavior:singlePressBehavior({type:'previous-page' as const}),appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-next`,index:11,behavior:singlePressBehavior({type:'next-page' as const}),appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-media`,index:12,behavior:singlePressBehavior({type:'go-to-page' as const,pageId:'media'}),appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-indicator`,index:13,behavior:singlePressBehavior({type:'page-indicator' as const}),appearance:{contentMode:'label-only' as const,label:{text:'0 / 0',position:'center' as const,size:'medium' as const,color:'#ffffff'}}},
+    {id:`${prefix}-auto`,index:14,behavior:singlePressBehavior({type:'resume-auto-page' as const}),appearance:{contentMode:'hidden' as const}},
   ];
   const document=defaultStudioDocument();document.pages=[{id:'home',title:'홈',buttons:navigation('home')},{id:'web',title:'웹',match:{appBundleId:'org.mozilla.firefox'},buttons:navigation('web')},{id:'media',title:'미디어',buttons:navigation('media')}];
   const board=new PageBoard(studioDocumentToPageConfig(document));
@@ -277,7 +277,7 @@ test('Studio v3 navigation actions move outer pages, pin manual selection and re
 
 test('outer navigation cancels a held binding when automatic context changes the page',()=>{
   const document=defaultStudioDocument();document.pages=[
-    {id:'home',title:'홈',buttons:[{id:'next',index:0,action:{type:'next-page'},appearance:{contentMode:'hidden'}}]},
+    {id:'home',title:'홈',buttons:[{id:'next',index:0,behavior:singlePressBehavior({type:'next-page'}),appearance:{contentMode:'hidden'}}]},
     {id:'web',title:'웹',match:{appBundleId:'org.mozilla.firefox'}},
   ];
   const board=new PageBoard(studioDocumentToPageConfig(document));board.down(0);board.context({available:true,appBundleId:'org.mozilla.firefox'},0);board.context({available:true,appBundleId:'org.mozilla.firefox'},250);

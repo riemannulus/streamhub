@@ -1,13 +1,13 @@
 import {expect,test} from 'bun:test';
 import {addPage,deletePage,duplicatePage,movePage,pageReferences,renamePage,setDefaultPage} from './editing';
-import {defaultStudioDocument,type StudioDocument} from '../studio/document';
+import {actionsInBehavior,defaultStudioDocument,singlePressBehavior,type StudioDocument} from '../studio/document';
 
 const initial=():StudioDocument=>{
   const document=defaultStudioDocument({id:'11111111-1111-4111-8111-111111111111'});
   document.pages=[
     {id:'home',title:'Home',buttons:[
-      {id:'to-home',index:0,action:{type:'go-to-page',pageId:'home'},appearance:{contentMode:'hidden'}},
-      {id:'to-web',index:1,action:{type:'go-to-page',pageId:'web'},appearance:{contentMode:'hidden'}},
+      {id:'to-home',index:0,behavior:singlePressBehavior({type:'go-to-page',pageId:'home'}),appearance:{contentMode:'hidden'}},
+      {id:'to-web',index:1,behavior:singlePressBehavior({type:'go-to-page',pageId:'web'}),appearance:{contentMode:'hidden'}},
     ]},
     {id:'web',title:'Web'},
     {id:'media',title:'Media'},
@@ -41,7 +41,7 @@ test('duplicatePage gives pages and buttons unique IDs and remaps self reference
   const document=initial(),duplicated=duplicatePage(document,'home'),copy=duplicated.pages.at(-1)!;
   expect(copy).toMatchObject({id:'home-copy',title:'Home (복사)'});
   expect(copy.buttons?.map(button=>button.id)).toEqual(['to-home-copy','to-web-copy']);
-  expect(copy.buttons?.map(button=>button.action)).toEqual([
+  expect(copy.buttons?.flatMap(button=>actionsInBehavior(button.behavior))).toEqual([
     {type:'go-to-page',pageId:'home-copy'},
     {type:'go-to-page',pageId:'web'},
   ]);
@@ -56,6 +56,21 @@ test('pageReferences reports incoming buttons and deletion never rewrites them s
   expect(pageReferences(document,'web')).toEqual([{pageId:'home',buttonId:'to-web'}]);
   expect(()=>deletePage(document,'web')).toThrow('page is still referenced');
   expect(document.pages).toHaveLength(3);
+});
+
+test('copy and references traverse every isolated behavior branch and sequence',()=>{
+  const document=initial(),button=document.pages[0].buttons![0]!;
+  button.behavior={
+    press:{type:'sequence',sequence:{mode:'sequential',steps:[{type:'action',action:{type:'open-app',bundleId:'org.mozilla.firefox'}},{type:'action',action:{type:'go-to-page',pageId:'web'}}]}},
+    doublePress:{type:'single',action:{type:'go-to-page',pageId:'media'}},
+    hold:{type:'toggle',initial:'off',offToOn:{mode:'sequential',steps:[{type:'action',action:{type:'go-to-page',pageId:'web'}}]},onToOff:{mode:'sequential',steps:[{type:'action',action:{type:'go-to-page',pageId:'home'}}]}},
+    doublePressMs:300,holdMs:500,
+  };
+  expect(pageReferences(document,'web')).toContainEqual({pageId:'home',buttonId:'to-home'});
+  const copy=duplicatePage(document,'home'),copied=copy.pages.at(-1)!.buttons![0]!;
+  expect(actionsInBehavior(copied.behavior).filter(action=>action.type==='go-to-page').map(action=>action.pageId)).toEqual(['web','media','web','home-copy']);
+  (copied.behavior.press as any).sequence.steps[0].action.bundleId='changed';
+  expect((button.behavior.press as any).sequence.steps[0].action.bundleId).toBe('org.mozilla.firefox');
 });
 
 test('deletePage protects the only page and requires an explicit default replacement',()=>{

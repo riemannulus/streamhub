@@ -1,11 +1,11 @@
 import {expect,test} from 'bun:test';
 import {copyButton,duplicateButton,moveButton,pasteButton,removeButton,shortcutFor,type ButtonClipboard} from './clipboard';
-import {defaultStudioDocument,type StudioDocument} from '../../studio/document';
+import {defaultStudioDocument,singlePressBehavior,type StudioDocument} from '../../studio/document';
 
 const document=():StudioDocument=>{
   const value=defaultStudioDocument({id:'33333333-3333-4333-8333-333333333333'});value.pages=[{id:'home',title:'Home',buttons:[
-    {id:'one',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'icon-only',icon:{assetId:'a'.repeat(64),fit:'contain'}}},
-    {id:'two',index:1,action:{type:'none'},appearance:{contentMode:'hidden'}},
+    {id:'one',index:0,behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance:{contentMode:'icon-only',icon:{assetId:'a'.repeat(64),fit:'contain'}}},
+    {id:'two',index:1,behavior:singlePressBehavior({type:'none'}),appearance:{contentMode:'hidden'}},
   ]},{id:'web',title:'Web'}];return value;
 };
 
@@ -19,9 +19,9 @@ test('move handles blank targets and requires explicit swap confirmation for occ
 
 test('copy stays in memory and cross-page paste assigns a fresh ID while preserving assets',()=>{
   const input=document(),clipboard=copyButton(input,'home',0)!;
-  expect(clipboard).toEqual({version:1,button:{action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'icon-only',icon:{assetId:'a'.repeat(64),fit:'contain'}}}});
-  const pasted=pasteButton(input,'web',3,clipboard);expect(pasted.pages[1].buttons?.[0]).toMatchObject({index:3,action:{type:'open-app'},appearance:{icon:{assetId:'a'.repeat(64)}}});expect(pasted.pages[1].buttons?.[0].id).not.toBe('one');
-  (clipboard.button.action as {bundleId:string}).bundleId='changed';expect(input.pages[0].buttons?.[0].action).toMatchObject({bundleId:'org.mozilla.firefox'});
+  expect(clipboard).toEqual({version:1,button:{behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance:{contentMode:'icon-only',icon:{assetId:'a'.repeat(64),fit:'contain'}}}});
+  const pasted=pasteButton(input,'web',3,clipboard);expect(pasted.pages[1].buttons?.[0]).toMatchObject({index:3,behavior:{press:{action:{type:'open-app'}}},appearance:{icon:{assetId:'a'.repeat(64)}}});expect(pasted.pages[1].buttons?.[0].id).not.toBe('one');
+  ((clipboard.button.behavior.press as any).action as {bundleId:string}).bundleId='changed';expect(input.pages[0].buttons?.[0].behavior.press).toMatchObject({action:{bundleId:'org.mozilla.firefox'}});
 });
 
 test('duplicate and remove are immutable, bounded and collision-safe',()=>{

@@ -58,25 +58,25 @@ export type KeyBehavior = {
 - `ButtonDefinition.action` becomes `ButtonDefinition.behavior`.
 - Core editor-created buttons use `{press:{type:'single', action}, doublePressMs:300, holdMs:500}`.
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Assert a core single press round-trips. Reject zero branches, nested sequences, more than 16 steps per sequence, delays outside `10..30_000`, parallel delays, page-indicator inside a sequence, `doublePressMs` outside `150..750`, `holdMs` outside `300..2_000`, and `holdMs <= doublePressMs`.
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `bun test packages/studio/document.test.ts packages/editor/editing.test.ts`
 
 Expected: FAIL because `KeyBehavior` is not defined.
 
-- [ ] **Step 3: Implement strict cloning and validation**
+- [x] **Step 3: Implement strict cloning and validation**
 
 Reuse `validateButtonAction` for every leaf. Navigation is allowed only as the final sequential action and is rejected in parallel or toggle programs. `none` and `page-indicator` are not executable leaves.
 
-- [ ] **Step 4: Update editing transforms**
+- [x] **Step 4: Update editing transforms**
 
 Copy, duplicate, undo, and paste must structured-clone the whole behavior without sharing a `steps` array. Page reference discovery must inspect every behavior branch and every sequence step.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/studio/document.test.ts packages/editor/editing.test.ts && bun run typecheck`
 

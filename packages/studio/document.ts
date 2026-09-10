@@ -29,7 +29,14 @@ export type ButtonAction=
   |{type:'next-page'}
   |{type:'page-indicator'}
   |{type:'resume-auto-page'};
-export type ButtonDefinition={id:string;index:number;action:ButtonAction;appearance:ButtonAppearance};
+export type ActionStep={type:'action';action:ButtonAction}|{type:'delay';milliseconds:number};
+export type ActionSequence={mode:'sequential'|'parallel';steps:ActionStep[]};
+export type ActionProgram=
+  |{type:'single';action:ButtonAction}
+  |{type:'sequence';sequence:ActionSequence}
+  |{type:'toggle';initial:'off'|'on';offToOn:ActionSequence;onToOff:ActionSequence};
+export type KeyBehavior={press?:ActionProgram;doublePress?:ActionProgram;hold?:ActionProgram;doublePressMs:number;holdMs:number};
+export type ButtonDefinition={id:string;index:number;behavior:KeyBehavior;appearance:ButtonAppearance};
 export type StudioPage={id:string;title:string;match?:PageDefinition['match'];priority?:number;appearance?:StudioAppearance;buttons?:ButtonDefinition[]};
 export type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:number};
 export type StudioDocument={version:3;id:string;device:{kind:'streamdeck-classic-5x3'};defaultPageId:string;pages:StudioPage[];standby:StudioAppearance;motion:{pageChange:TransitionSpec;unlock:TransitionSpec;reconnect:TransitionSpec}};
@@ -84,6 +91,55 @@ export function validateButtonAction(raw:unknown,context:StudioValidationContext
   return{type:'registered',name,args:Object.fromEntries(Object.entries(args).map(([key,item])=>[text(key,128),bodyText(item,512)]))};
 }
 
+const navigation=(action:ButtonAction)=>['go-to-page','previous-page','next-page','resume-auto-page'].includes(action.type);
+function validateActionSequence(raw:unknown,context:StudioValidationContext):ActionSequence{
+  const value=object(raw);exact(value,['mode','steps']);
+  if(value.mode!=='sequential'&&value.mode!=='parallel')throw new Error('Invalid sequence mode');
+  if(!Array.isArray(value.steps)||value.steps.length<1||value.steps.length>16)throw new Error('Action sequence requires 1–16 steps');
+  const rawSteps=value.steps as unknown[];
+  const steps=rawSteps.map((rawStep,index):ActionStep=>{
+    const step=object(rawStep);
+    if(step.type==='delay'){
+      exact(step,['type','milliseconds']);
+      if(value.mode==='parallel')throw new Error('Parallel sequences cannot contain delays');
+      if(!Number.isInteger(step.milliseconds)||(step.milliseconds as number)<10||(step.milliseconds as number)>30_000)throw new Error('Delay must be 10–30000 ms');
+      return{type:'delay',milliseconds:step.milliseconds as number};
+    }
+    if(step.type!=='action')throw new Error('Invalid action step');
+    exact(step,['type','action']);const action=validateButtonAction(step.action,context);
+    if(action.type==='none'||action.type==='page-indicator')throw new Error('Sequence requires executable actions');
+    if(navigation(action)&&(value.mode==='parallel'||index!==rawSteps.length-1))throw new Error('Navigation must be the final sequential action');
+    return{type:'action',action};
+  });
+  return{mode:value.mode,steps};
+}
+function validateActionProgram(raw:unknown,context:StudioValidationContext):ActionProgram{
+  const value=object(raw);
+  if(value.type==='single'){exact(value,['type','action']);return{type:'single',action:validateButtonAction(value.action,context)};}
+  if(value.type==='sequence'){exact(value,['type','sequence']);return{type:'sequence',sequence:validateActionSequence(value.sequence,context)};}
+  if(value.type==='toggle'){
+    exact(value,['type','initial','offToOn','onToOff']);if(value.initial!=='off'&&value.initial!=='on')throw new Error('Invalid toggle initial state');
+    const offToOn=validateActionSequence(value.offToOn,context),onToOff=validateActionSequence(value.onToOff,context);
+    return{type:'toggle',initial:value.initial,offToOn,onToOff};
+  }
+  throw new Error('Invalid action program');
+}
+export function validateKeyBehavior(raw:unknown,context:StudioValidationContext={}):KeyBehavior{
+  const value=object(raw);exact(value,['press','doublePress','hold','doublePressMs','holdMs']);
+  if(value.press===undefined&&value.doublePress===undefined&&value.hold===undefined)throw new Error('Key behavior requires at least one branch');
+  if(!Number.isInteger(value.doublePressMs)||(value.doublePressMs as number)<150||(value.doublePressMs as number)>750)throw new Error('doublePressMs must be 150–750 ms');
+  if(!Number.isInteger(value.holdMs)||(value.holdMs as number)<300||(value.holdMs as number)>2_000)throw new Error('holdMs must be 300–2000 ms');
+  if((value.holdMs as number)<=(value.doublePressMs as number))throw new Error('holdMs must be greater than doublePressMs');
+  return{...(value.press===undefined?{}:{press:validateActionProgram(value.press,context)}),...(value.doublePress===undefined?{}:{doublePress:validateActionProgram(value.doublePress,context)}),...(value.hold===undefined?{}:{hold:validateActionProgram(value.hold,context)}),doublePressMs:value.doublePressMs as number,holdMs:value.holdMs as number};
+}
+export const singlePressBehavior=(action:ButtonAction):KeyBehavior=>({press:{type:'single',action},doublePressMs:300,holdMs:500});
+export const primaryButtonAction=(button:Pick<ButtonDefinition,'behavior'>):ButtonAction=>button.behavior.press?.type==='single'?button.behavior.press.action:{type:'none'};
+export function actionsInBehavior(behavior:KeyBehavior):ButtonAction[]{
+  const sequence=(value:ActionSequence)=>value.steps.flatMap(step=>step.type==='action'?[step.action]:[]);
+  const program=(value:ActionProgram)=>value.type==='single'?[value.action]:value.type==='sequence'?sequence(value.sequence):[...sequence(value.offToOn),...sequence(value.onToOff)];
+  return[behavior.press,behavior.doublePress,behavior.hold].flatMap(value=>value?program(value):[]);
+}
+
 function transition(raw:unknown):TransitionSpec{const value=object(raw);exact(value,['type','durationMs']);if(!['none','crossfade','fade-through-black'].includes(value.type as string))throw new Error('Invalid transition');if(!Number.isInteger(value.durationMs)||(value.durationMs as number)<0||(value.durationMs as number)>500)throw new Error('Transition duration must be 0–500 ms');return{type:value.type as TransitionSpec['type'],durationMs:value.durationMs as number};}
 
 export function defaultStudioDocument(options:{id?:string}={}):StudioDocument{return{version:3,id:options.id??randomUUID(),device:{kind:'streamdeck-classic-5x3'},defaultPageId:'home',pages:[{id:'home',title:'홈'}],standby:{color:'#000000'},motion:{pageChange:{type:'crossfade',durationMs:280},unlock:{type:'crossfade',durationMs:480},reconnect:{type:'crossfade',durationMs:360}}};}
@@ -100,11 +156,11 @@ export function validateStudioDocument(raw:unknown,context:StudioValidationConte
     if(input.priority!==undefined){if(!Number.isInteger(input.priority)||(input.priority as number)<-1000||(input.priority as number)>1000)throw new Error('Invalid priority');page.priority=input.priority as number;}
     if(input.match!==undefined){const match=object(input.match);exact(match,['appBundleId','windowTitle','displayId']);if(!Object.keys(match).length)throw new Error('Expected a page condition');const normalized:NonNullable<StudioPage['match']>={};if(match.appBundleId!==undefined)normalized.appBundleId=bundleId(match.appBundleId);if(match.windowTitle!==undefined){const title=object(match.windowTitle);exact(title,['mode','value']);if(title.mode!=='equals'&&title.mode!=='contains')throw new Error('Invalid title condition');normalized.windowTitle={mode:title.mode,value:text(title.value,512)};}if(match.displayId!==undefined)normalized.displayId=text(match.displayId,128);page.match=normalized;}
     if(input.appearance!==undefined)page.appearance=studioAppearance(input.appearance,context);
-    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','action','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);return{id:buttonId,index:button.index as number,action:validateButtonAction(button.action,context),appearance:validateButtonAppearance(button.appearance,context)};});}
+    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','behavior','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);return{id:buttonId,index:button.index as number,behavior:validateKeyBehavior(button.behavior,context),appearance:validateButtonAppearance(button.appearance,context)};});}
     return page;
   });
   const defaultPageId=identifier(value.defaultPageId,'default page');if(!pageIds.has(defaultPageId))throw new Error('Unknown default page');
-  for(const page of pages)for(const button of page.buttons??[])if(button.action.type==='go-to-page'&&!pageIds.has(button.action.pageId))throw new Error('Unknown target page');
+  for(const page of pages)for(const button of page.buttons??[])for(const action of actionsInBehavior(button.behavior))if(action.type==='go-to-page'&&!pageIds.has(action.pageId))throw new Error('Unknown target page');
   const motion=object(value.motion);exact(motion,['pageChange','unlock','reconnect']);
   return{version:3,id,device:{kind:'streamdeck-classic-5x3'},defaultPageId,pages,standby:studioAppearance(value.standby,context),motion:{pageChange:transition(motion.pageChange),unlock:transition(motion.unlock),reconnect:transition(motion.reconnect)}};
 }

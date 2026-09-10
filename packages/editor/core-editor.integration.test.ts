@@ -4,7 +4,7 @@ import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {RuntimeToPluginMessage} from '../presentation/protocol';
-import type {ButtonAction,ButtonDefinition,StudioDocument} from '../studio/document';
+import {singlePressBehavior,type ButtonAction,type ButtonDefinition,type StudioDocument} from '../studio/document';
 import type {ButtonEffect} from '../streamdeck';
 import {SignalStore} from '../host/src/store';
 import {startPresentationService,type PresentationService} from '../host/src/presentation';
@@ -24,7 +24,7 @@ afterEach(async()=>{
 });
 
 const appearance=(label:string):ButtonDefinition['appearance']=>({contentMode:'label-only',label:{text:label,position:'center',size:'small',color:'#ffffff'}});
-const button=(id:string,index:number,label:string,action:ButtonAction):ButtonDefinition=>({id,index,action,appearance:appearance(label)});
+const button=(id:string,index:number,label:string,action:ButtonAction):ButtonDefinition=>({id,index,behavior:singlePressBehavior(action),appearance:appearance(label)});
 const presentationMessage=(messages:RuntimeToPluginMessage[])=>{
   const message=messages.at(-1);
   if(message?.type!=='presentation')throw new Error('Expected a presentation message');

@@ -1,13 +1,13 @@
 import {expect,test} from 'bun:test';
-import {defaultStudioDocument} from '../../studio/document';
+import {defaultStudioDocument,singlePressBehavior} from '../../studio/document';
 import {StudioModel} from './model';
 
 test('canvas model edits v3 backgrounds, hidden apps, motion and history',()=>{
   const model=new StudioModel(defaultStudioDocument());
   model.setBackground('page','a'.repeat(64));
-  model.setButton({id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'hidden'}});
+  model.setButton({id:'firefox',index:0,behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance:{contentMode:'hidden'}});
   model.setMotion('unlock',{type:'fade-through-black',durationMs:400});
-  expect(model.document.pages[0].buttons?.[0]).toMatchObject({action:{type:'open-app'}});
+  expect(model.document.pages[0].buttons?.[0]).toMatchObject({behavior:{press:{action:{type:'open-app'}}}});
   model.undo();expect(model.document.motion.unlock.type).toBe('crossfade');
   model.redo();expect(model.dirty).toBe(true);model.markApplied();expect(model.dirty).toBe(false);
 });
@@ -26,7 +26,7 @@ test('page command wrappers create one history entry and keep selection determin
 });
 
 test('button gestures create one undo entry, preserve selection and branch history',()=>{
-  const document=defaultStudioDocument();document.pages.push({id:'web',title:'Web'});document.pages[0].buttons=[{id:'one',index:0,action:{type:'none'},appearance:{contentMode:'hidden'}}];const model=new StudioModel(document);
+  const document=defaultStudioDocument();document.pages.push({id:'web',title:'Web'});document.pages[0].buttons=[{id:'one',index:0,behavior:singlePressBehavior({type:'none'}),appearance:{contentMode:'hidden'}}];const model=new StudioModel(document);
   model.selectKey(0);model.copyButton();model.selectPage('web');model.selectKey(3);model.pasteButton();expect(model.document.pages[1].buttons?.[0].index).toBe(3);
   model.undo();expect(model.document.pages[1].buttons).toBeUndefined();expect(model.selectedPageId).toBe('web');expect(model.selectedKey).toBe(3);
   model.redo();expect(model.document.pages[1].buttons).toHaveLength(1);

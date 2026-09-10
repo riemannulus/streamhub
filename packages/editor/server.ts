@@ -8,7 +8,7 @@ import { SimulatorSession } from './simulator';
 import { checkDraft } from '../simulator/draft-check';
 import { validateSimulatorBoard } from './simulator';
 import {StudioRepository,StudioVersionConflictError} from '../studio/repository';
-import {defaultStudioDocument,validateStudioDocument} from '../studio/document';
+import {defaultStudioDocument,singlePressBehavior,validateStudioDocument} from '../studio/document';
 import {extractKeyPngs,streamDeckClassicGeometry} from '../presentation/geometry';
 import {renderStudioBackground} from '../presentation/render';
 import {composeButton} from '../presentation/button-compositor';
@@ -98,7 +98,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
             const payload=await request.json() as Record<string,unknown>;
             if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).some(key=>!['index','pageAppearance','appearance'].includes(key)))throw new Error('Invalid preview request');
             if(!Number.isInteger(payload.index)||(payload.index as number)<0||(payload.index as number)>14)throw new Error('Invalid key index');
-            const document=defaultStudioDocument({id:'00000000-0000-4000-8000-000000000001'});document.pages[0].appearance=payload.pageAppearance as never;document.pages[0].buttons=[{id:'preview',index:payload.index as number,action:{type:'none'},appearance:payload.appearance as never}];
+            const document=defaultStudioDocument({id:'00000000-0000-4000-8000-000000000001'});document.pages[0].appearance=payload.pageAppearance as never;document.pages[0].buttons=[{id:'preview',index:payload.index as number,behavior:singlePressBehavior({type:'none'}),appearance:payload.appearance as never}];
             const validated=validateStudioDocument(document),background=await renderStudioBackground(validated.pages[0].appearance,repository.assets),crop=(await extractKeyPngs(background))[payload.index as number]!;
             const image=await composeButton({appearance:validated.pages[0].buttons![0].appearance,background:crop,assets:repository.assets});
             return new Response(new Uint8Array(image),{headers:{...headers,'Content-Type':'image/png'}});

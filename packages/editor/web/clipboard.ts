@@ -1,4 +1,4 @@
-import {validateButtonAction,validateButtonAppearance,validateStudioDocument,type ButtonDefinition,type StudioDocument} from '../../studio/document';
+import {validateButtonAppearance,validateKeyBehavior,validateStudioDocument,type ButtonDefinition,type StudioDocument} from '../../studio/document';
 
 export type ButtonClipboard={version:1;button:Omit<ButtonDefinition,'id'|'index'>};
 export type ButtonLocation={pageId:string;index:number};
@@ -11,12 +11,12 @@ const find=(document:StudioDocument,location:ButtonLocation)=>page(document,loca
 
 export function copyButton(input:StudioDocument,pageId:string,index:number):ButtonClipboard|undefined{
   const document=documentClone(input),button=find(document,{pageId,index});if(!button)return;
-  return{version:1,button:structuredClone({action:button.action,appearance:button.appearance})};
+  return{version:1,button:structuredClone({behavior:button.behavior,appearance:button.appearance})};
 }
 
 function validateClipboard(raw:ButtonClipboard):ButtonClipboard{
-  if(!raw||raw.version!==1||!raw.button||typeof raw.button!=='object'||Array.isArray(raw.button)||Object.keys(raw.button).some(key=>!['action','appearance'].includes(key)))throw new Error('Invalid button clipboard');
-  return{version:1,button:{action:validateButtonAction(raw.button.action),appearance:validateButtonAppearance(raw.button.appearance)}};
+  if(!raw||raw.version!==1||!raw.button||typeof raw.button!=='object'||Array.isArray(raw.button)||Object.keys(raw.button).some(key=>!['behavior','appearance'].includes(key)))throw new Error('Invalid button clipboard');
+  return{version:1,button:{behavior:validateKeyBehavior(raw.button.behavior),appearance:validateButtonAppearance(raw.button.appearance)}};
 }
 
 export function pasteButton(input:StudioDocument,pageId:string,index:number,raw:ButtonClipboard):StudioDocument{

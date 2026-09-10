@@ -1,5 +1,5 @@
 import {CONTENT_KEYS,SessionDeck,type DeckKey,type DeckLayout,type DeckPage,type PressIntent,type SessionRecord} from './index';
-import {KEY_CODES,MEDIA_COMMANDS,type KeyCode,type MediaCommand,type StudioDocument} from '../studio/document';
+import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,type KeyCode,type MediaCommand,type StudioDocument} from '../studio/document';
 
 export const BUILTIN_ICONS=['terminal','folder','check','alert','play','link'] as const;
 export type BuiltinIcon=typeof BUILTIN_ICONS[number];
@@ -30,7 +30,7 @@ export function studioDocumentToPageConfig(document:StudioDocument):PageConfig{
   const project=(button:StudioDocument['pages'][number]['buttons'] extends (infer T)[]|undefined?T:never):PageButton=>{
     const label=button.appearance.label?.text,style=button.appearance.background?.color?{color:button.appearance.background.color}:{};
     const common={buttonId:button.id,index:button.index,...style,...(label?{label}:{})};
-    const action=button.action;
+    const action=primaryButtonAction(button);
     if(action.type==='open-app')return{...common,type:'app',bundleId:action.bundleId};
     if(action.type==='open-path')return{...common,type:'path',path:action.path};
     if(action.type==='open-url')return{...common,type:'open',url:action.url,...(action.browserBundleId?{browserBundleId:action.browserBundleId}:{})};

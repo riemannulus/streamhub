@@ -1,4 +1,4 @@
-import type {ButtonAction,ButtonDefinition} from '../../studio/document';
+import {singlePressBehavior,type ButtonAction,type ButtonDefinition} from '../../studio/document';
 
 export type ActionGroup='기본'|'탐색'|'데이터';
 export type ActionType=ButtonAction['type']|'dynamic-region'|'dynamic-previous'|'dynamic-next'|'dynamic-pin';
@@ -41,7 +41,7 @@ export function createButtonForAction(type:ButtonAction['type'],index:number,opt
   else if(type==='registered'){const command=options.registered?.[0];action=command?{type,name:command.name,args:Object.fromEntries(command.args.map(key=>[key,'']))}:{type:'none'};}
   else if(type==='go-to-page')action={type,pageId:options.pageId};
   else action={type} as ButtonAction;
-  return{id:crypto.randomUUID(),index,action,appearance:{contentMode:'label-only',label:{text:item.label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
+  return{id:crypto.randomUUID(),index,behavior:singlePressBehavior(action),appearance:{contentMode:'label-only',label:{text:item.label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
 }
 
 export function renderActionLibrary(container:HTMLElement,query:string,onChoose:(type:ButtonAction['type'])=>void):void{

@@ -1,4 +1,4 @@
-import {validateStudioDocument,type StudioDocument,type StudioPage} from '../studio/document';
+import {actionsInBehavior,validateStudioDocument,type ButtonAction,type StudioDocument,type StudioPage} from '../studio/document';
 
 export type PageReference={pageId:string;buttonId:string};
 
@@ -24,6 +24,7 @@ function titleForCopy(document:StudioDocument,title:string):string{
   }
   return result;
 }
+function rewritePage(action:ButtonAction,from:string,to:string):void{if(action.type==='go-to-page'&&action.pageId===from)action.pageId=to;}
 
 export function addPage(input:StudioDocument):StudioDocument{
   const document=clone(input);
@@ -49,7 +50,7 @@ export function duplicatePage(input:StudioDocument,pageId:string):StudioDocument
   const buttonIds=new Set(document.pages.flatMap(item=>(item.buttons??[]).map(button=>button.id)));
   for(const button of copy.buttons??[]){
     button.id=uniqueId(buttonIds,`${button.id.slice(0,59)}-copy`);buttonIds.add(button.id);
-    if(button.action.type==='go-to-page'&&button.action.pageId===original.id)button.action.pageId=copyId;
+    for(const action of actionsInBehavior(button.behavior))rewritePage(action,original.id,copyId);
   }
   document.pages.push(copy);
   return validateStudioDocument(document);
@@ -72,7 +73,7 @@ export function setDefaultPage(input:StudioDocument,pageId:string):StudioDocumen
 export function pageReferences(input:StudioDocument,targetPageId:string):PageReference[]{
   const document=clone(input);page(document,targetPageId);
   return document.pages.flatMap(item=>(item.buttons??[])
-    .filter(button=>button.action.type==='go-to-page'&&button.action.pageId===targetPageId)
+    .filter(button=>actionsInBehavior(button.behavior).some(action=>action.type==='go-to-page'&&action.pageId===targetPageId))
     .map(button=>({pageId:item.id,buttonId:button.id})));
 }
 

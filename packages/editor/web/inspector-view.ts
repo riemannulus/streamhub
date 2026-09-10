@@ -1,12 +1,13 @@
 import type {AppCatalogItem,PathPickerResult} from '../../host/src/catalog';
-import {KEY_CODES,MEDIA_COMMANDS,type ButtonDefinition, type ButtonAppearance} from '../../studio/document';
+import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,singlePressBehavior,type ButtonAction,type ButtonDefinition, type ButtonAppearance} from '../../studio/document';
 import type {StudioModel} from './model';
 
 export type InspectorField='empty'|'action'|'content-mode'|'icon'|'label'|'background';
 export function inspectorFor(button?:ButtonDefinition):InspectorField[]{
   if(!button)return['empty'];
+  const currentAction=primaryButtonAction(button);
   const appearance:InspectorField[]=['content-mode','icon','label','background'];
-  return button.action.type==='none'||button.action.type==='previous-page'||button.action.type==='next-page'||button.action.type==='page-indicator'||button.action.type==='resume-auto-page'?[...appearance]:['action',...appearance];
+  return currentAction.type==='none'||currentAction.type==='previous-page'||currentAction.type==='next-page'||currentAction.type==='page-indicator'||currentAction.type==='resume-auto-page'?[...appearance]:['action',...appearance];
 }
 
 type Resources={apps:AppCatalogItem[];actions:{name:string;args:string[]}[];upload(file:File):Promise<string>;pick(kind:'file'|'folder'):Promise<PathPickerResult>;changed():void;error(message:string):void};
@@ -21,24 +22,25 @@ export function renderInspector(container:HTMLElement,model:StudioModel,resource
   const heading=document.createElement('div');heading.className='inspector-heading';heading.innerHTML=`<span>✦</span><div><h2></h2><small></small></div>`;heading.querySelector('h2')!.textContent=button?(button.appearance.label?.text||`버튼 ${model.selectedKey+1}`):`빈 키 ${model.selectedKey+1}`;heading.querySelector('small')!.textContent=`${Math.floor(model.selectedKey/5)+1}행 ${model.selectedKey%5+1}열`;container.append(heading);
   if(!button){const empty=document.createElement('div');empty.className='empty-inspector';empty.innerHTML='<b>동작을 선택하세요</b><p>왼쪽 동작을 클릭하거나 이 키로 끌어 놓으세요.</p>';container.append(empty);return;}
   const update=(mutator:(next:ButtonDefinition)=>void)=>{const next=structuredClone(button);mutator(next);try{model.setButton(next);resources.changed();}catch(error){resources.error(error instanceof Error?error.message:String(error));}};
+  const currentAction=primaryButtonAction(button),updateAction=(action:ButtonAction)=>update(next=>{next.behavior=singlePressBehavior(action);});
   const action=document.createElement('section');action.className='inspector-section';action.innerHTML='<h3>누르면 할 일</h3>';container.append(action);
-  if(button.action.type==='open-app'){
-    const picker=select(resources.apps.map(app=>({value:app.bundleId,label:app.name})),button.action.bundleId);picker.onchange=()=>update(next=>{next.action={type:'open-app',bundleId:picker.value};});action.append(control('앱',picker));const meta=document.createElement('small');meta.textContent=button.action.bundleId;action.append(meta);
-  }else if(button.action.type==='open-path'){
-    const value=input(button.action.path);value.readOnly=true;action.append(control('선택한 경로',value));for(const kind of ['file','folder'] as const){const pick=document.createElement('button');pick.textContent=kind==='file'?'파일 선택':'폴더 선택';pick.onclick=async()=>{const result=await resources.pick(kind);if('path'in result)update(next=>{next.action={type:'open-path',path:result.path};});};action.append(pick);}
-  }else if(button.action.type==='open-url'){
-    const value=input(button.action.url,'url');value.onchange=()=>update(next=>{next.action={type:'open-url',url:value.value,...(button.action.type==='open-url'&&button.action.browserBundleId?{browserBundleId:button.action.browserBundleId}:{})};});action.append(control('웹 주소',value));
-    const browser=select([{value:'',label:'기본 브라우저'},...resources.apps.map(app=>({value:app.bundleId,label:app.name}))],button.action.browserBundleId??'');browser.onchange=()=>update(next=>{if(next.action.type==='open-url')next.action={...next.action,...(browser.value?{browserBundleId:browser.value}:{browserBundleId:undefined})};});action.append(control('브라우저',browser));
-  }else if(button.action.type==='hotkey'){
-    const value=input(button.action.keys.join(' + '));value.readOnly=true;const capture=document.createElement('button');capture.textContent='단축키 기록';capture.onclick=()=>{capture.textContent='키를 누르세요';const listener=(event:KeyboardEvent)=>{event.preventDefault();const keys=[] as string[];if(event.metaKey)keys.push('command');if(event.altKey)keys.push('option');if(event.ctrlKey)keys.push('control');if(event.shiftKey)keys.push('shift');const key=event.key.toLowerCase()===' '?'space':event.key.toLowerCase();if((KEY_CODES as readonly string[]).includes(key)&&!['command','option','control','shift'].includes(key))keys.push(key);window.removeEventListener('keydown',listener,true);capture.textContent='단축키 기록';if(keys.length>1)update(next=>{next.action={type:'hotkey',keys:keys as typeof button.action.keys};});};window.addEventListener('keydown',listener,true);};action.append(control('현재 조합',value),capture);
-  }else if(button.action.type==='text'){
-    const value=document.createElement('textarea');value.value=button.action.text;value.onchange=()=>update(next=>{if(next.action.type==='text')next.action.text=value.value;});const mode=select([{value:'type',label:'키 입력으로 쓰기'},{value:'paste',label:'붙여넣기'}],button.action.mode);mode.onchange=()=>update(next=>{if(next.action.type==='text')next.action.mode=mode.value as 'type'|'paste';});action.append(control('입력할 문구',value),control('입력 방식',mode));const warning=document.createElement('p');warning.className='warning';warning.textContent='암호나 토큰을 저장하지 마세요. 이 문구는 Studio 문서에 그대로 저장됩니다.';action.append(warning);
-  }else if(button.action.type==='media'){
-    const labels:Record<string,string>={'play-pause':'재생 / 일시정지','previous-track':'이전 트랙','next-track':'다음 트랙','volume-up':'음량 높이기','volume-down':'음량 낮추기','mute-toggle':'음소거 전환'},media=select(MEDIA_COMMANDS.map(value=>({value,label:labels[value]})),button.action.command);media.onchange=()=>update(next=>{next.action={type:'media',command:media.value as typeof button.action.command};});action.append(control('미디어 동작',media));
-  }else if(button.action.type==='registered'){
-    const command=select(resources.actions.map(item=>({value:item.name,label:item.name})),button.action.name);command.onchange=()=>{const definition=resources.actions.find(item=>item.name===command.value);update(next=>{next.action={type:'registered',name:command.value,args:Object.fromEntries((definition?.args??[]).map(key=>[key,'']))};});};action.append(control('등록된 명령',command));for(const [key,current] of Object.entries(button.action.args)){const value=input(current);value.onchange=()=>update(next=>{if(next.action.type==='registered')next.action.args[key]=value.value;});action.append(control(key,value));}
-  }else if(button.action.type==='go-to-page'){
-    const target=select(model.document.pages.map(item=>({value:item.id,label:item.title})),button.action.pageId);target.onchange=()=>update(next=>{next.action={type:'go-to-page',pageId:target.value};});action.append(control('이동할 페이지',target));
+  if(currentAction.type==='open-app'){
+    const picker=select(resources.apps.map(app=>({value:app.bundleId,label:app.name})),currentAction.bundleId);picker.onchange=()=>updateAction({type:'open-app',bundleId:picker.value});action.append(control('앱',picker));const meta=document.createElement('small');meta.textContent=currentAction.bundleId;action.append(meta);
+  }else if(currentAction.type==='open-path'){
+    const value=input(currentAction.path);value.readOnly=true;action.append(control('선택한 경로',value));for(const kind of ['file','folder'] as const){const pick=document.createElement('button');pick.textContent=kind==='file'?'파일 선택':'폴더 선택';pick.onclick=async()=>{const result=await resources.pick(kind);if('path'in result)updateAction({type:'open-path',path:result.path});};action.append(pick);}
+  }else if(currentAction.type==='open-url'){
+    const value=input(currentAction.url,'url');value.onchange=()=>updateAction({type:'open-url',url:value.value,...(currentAction.browserBundleId?{browserBundleId:currentAction.browserBundleId}:{})});action.append(control('웹 주소',value));
+    const browser=select([{value:'',label:'기본 브라우저'},...resources.apps.map(app=>({value:app.bundleId,label:app.name}))],currentAction.browserBundleId??'');browser.onchange=()=>updateAction({type:'open-url',url:currentAction.url,...(browser.value?{browserBundleId:browser.value}:{})});action.append(control('브라우저',browser));
+  }else if(currentAction.type==='hotkey'){
+    const value=input(currentAction.keys.join(' + '));value.readOnly=true;const capture=document.createElement('button');capture.textContent='단축키 기록';capture.onclick=()=>{capture.textContent='키를 누르세요';const listener=(event:KeyboardEvent)=>{event.preventDefault();const keys=[] as string[];if(event.metaKey)keys.push('command');if(event.altKey)keys.push('option');if(event.ctrlKey)keys.push('control');if(event.shiftKey)keys.push('shift');const key=event.key.toLowerCase()===' '?'space':event.key.toLowerCase();if((KEY_CODES as readonly string[]).includes(key)&&!['command','option','control','shift'].includes(key))keys.push(key);window.removeEventListener('keydown',listener,true);capture.textContent='단축키 기록';if(keys.length>1)updateAction({type:'hotkey',keys:keys as typeof currentAction.keys});};window.addEventListener('keydown',listener,true);};action.append(control('현재 조합',value),capture);
+  }else if(currentAction.type==='text'){
+    const value=document.createElement('textarea');value.value=currentAction.text;value.onchange=()=>updateAction({...currentAction,text:value.value});const mode=select([{value:'type',label:'키 입력으로 쓰기'},{value:'paste',label:'붙여넣기'}],currentAction.mode);mode.onchange=()=>updateAction({...currentAction,mode:mode.value as 'type'|'paste'});action.append(control('입력할 문구',value),control('입력 방식',mode));const warning=document.createElement('p');warning.className='warning';warning.textContent='암호나 토큰을 저장하지 마세요. 이 문구는 Studio 문서에 그대로 저장됩니다.';action.append(warning);
+  }else if(currentAction.type==='media'){
+    const labels:Record<string,string>={'play-pause':'재생 / 일시정지','previous-track':'이전 트랙','next-track':'다음 트랙','volume-up':'음량 높이기','volume-down':'음량 낮추기','mute-toggle':'음소거 전환'},media=select(MEDIA_COMMANDS.map(value=>({value,label:labels[value]})),currentAction.command);media.onchange=()=>updateAction({type:'media',command:media.value as typeof currentAction.command});action.append(control('미디어 동작',media));
+  }else if(currentAction.type==='registered'){
+    const command=select(resources.actions.map(item=>({value:item.name,label:item.name})),currentAction.name);command.onchange=()=>{const definition=resources.actions.find(item=>item.name===command.value);updateAction({type:'registered',name:command.value,args:Object.fromEntries((definition?.args??[]).map(key=>[key,'']))});};action.append(control('등록된 명령',command));for(const [key,current] of Object.entries(currentAction.args)){const value=input(current);value.onchange=()=>updateAction({...currentAction,args:{...currentAction.args,[key]:value.value}});action.append(control(key,value));}
+  }else if(currentAction.type==='go-to-page'){
+    const target=select(model.document.pages.map(item=>({value:item.id,label:item.title})),currentAction.pageId);target.onchange=()=>updateAction({type:'go-to-page',pageId:target.value});action.append(control('이동할 페이지',target));
   }else{action.remove();}
 
   const appearance=document.createElement('section');appearance.className='inspector-section';appearance.innerHTML='<h3>버튼 표시</h3>';container.append(appearance);

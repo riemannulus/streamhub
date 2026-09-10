@@ -1,8 +1,8 @@
 import {expect,test} from 'bun:test';
 import {filteredActions} from './action-library';
 import {inspectorFor} from './inspector-view';
-import type {ButtonDefinition} from '../../studio/document';
-import {defaultStudioDocument,validateStudioDocument} from '../../studio/document';
+import type {ButtonAction,ButtonDefinition} from '../../studio/document';
+import {defaultStudioDocument,singlePressBehavior,validateStudioDocument} from '../../studio/document';
 import {createButtonForAction} from './action-library';
 import {StudioState} from './state';
 
@@ -15,15 +15,15 @@ test('action search matches Korean labels and stable action types across groups'
 });
 
 test('inspector fields depend on action while appearance fields stay explicit',()=>{
-  const openAppButton:ButtonDefinition={id:'app',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance};
-  const pageIndicatorButton:ButtonDefinition={id:'indicator',index:1,action:{type:'page-indicator'},appearance};
+  const openAppButton:ButtonDefinition={id:'app',index:0,behavior:singlePressBehavior({type:'open-app',bundleId:'org.mozilla.firefox'}),appearance};
+  const pageIndicatorButton:ButtonDefinition={id:'indicator',index:1,behavior:singlePressBehavior({type:'page-indicator'}),appearance};
   expect(inspectorFor(openAppButton)).toEqual(['action','content-mode','icon','label','background']);
   expect(inspectorFor(pageIndicatorButton)).toEqual(['content-mode','icon','label','background']);
   expect(inspectorFor(undefined)).toEqual(['empty']);
 });
 
 test('every available core library action creates a valid v3 button',()=>{
-  const types=filteredActions('').filter(type=>!type.startsWith('dynamic-')) as ButtonDefinition['action']['type'][];
+  const types=filteredActions('').filter(type=>!type.startsWith('dynamic-')) as ButtonAction['type'][];
   for(const [index,type] of types.entries()){
     const document=defaultStudioDocument();document.pages[0].buttons=[createButtonForAction(type,index,{pageId:'home',appBundleId:'org.mozilla.firefox',registered:[{name:'build',args:['target']} ]})];
     expect(()=>validateStudioDocument(document,{actions:{build:{args:{target:{}}}}})).not.toThrow();
