@@ -230,10 +230,24 @@ test('region pin jumps aggregate pagination safely and all source lists are regi
 });
 
 test('Studio v3 adapter projects fixed effects',()=>{
-  const doc=defaultStudioDocument();doc.pages[0].buttons=[{id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:{contentMode:'hidden'}}];
+  const hidden={contentMode:'hidden' as const},doc=defaultStudioDocument();doc.pages[0].buttons=[
+    {id:'firefox',index:0,action:{type:'open-app',bundleId:'org.mozilla.firefox'},appearance:hidden},
+    {id:'path',index:1,action:{type:'open-path',path:'/tmp/example'},appearance:hidden},
+    {id:'url',index:2,action:{type:'open-url',url:'https://example.com',browserBundleId:'org.mozilla.firefox'},appearance:hidden},
+    {id:'hotkey',index:3,action:{type:'hotkey',keys:['command','k']},appearance:hidden},
+    {id:'text',index:4,action:{type:'text',text:'hello',mode:'type'},appearance:hidden},
+    {id:'media',index:5,action:{type:'media',command:'play-pause'},appearance:hidden},
+    {id:'registered',index:6,action:{type:'registered',name:'build',args:{target:'app'}},appearance:hidden},
+  ];
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys[0]).toMatchObject({type:'tile'});
   expect(click(board,0)).toMatchObject({type:'button-effect',effect:{type:'app',bundleId:'org.mozilla.firefox'}});
+  expect(click(board,1)).toMatchObject({effect:{type:'path',path:'/tmp/example'}});
+  expect(click(board,2)).toMatchObject({effect:{type:'open',url:'https://example.com/',browserBundleId:'org.mozilla.firefox'}});
+  expect(click(board,3)).toMatchObject({effect:{type:'hotkey',keys:['command','k']}});
+  expect(click(board,4)).toMatchObject({effect:{type:'text',text:'hello',mode:'type'}});
+  expect(click(board,5)).toMatchObject({effect:{type:'media',command:'play-pause'}});
+  expect(click(board,6)).toMatchObject({effect:{type:'action',name:'build',args:{target:'app'}}});
 });
 
 test('Studio background-only pages do not cover the canvas with empty pagination controls',()=>{

@@ -13,7 +13,14 @@ export type DeckKey =
   | { type: 'previous' | 'next'; index: number; enabled: boolean; urgentCount: number }
   | { type: 'pin'; index: number; record?: SessionRecord; hiddenCount: number };
 export type DeckPage = { index: number; pageCount: number; epoch: number; keys: DeckKey[]; viewId?: string; transition?: { type: 'none' | 'fade'; durationMs: number } };
-export type ButtonEffect={type:'open';url:string}|{type:'app';bundleId:string}|{type:'action';name:string;args:Record<string,string>};
+export type ButtonEffect=
+  |{type:'open';url:string;browserBundleId?:string}
+  |{type:'app';bundleId:string}
+  |{type:'path';path:string}
+  |{type:'hotkey';keys:string[]}
+  |{type:'text';text:string;mode:'paste'|'type'}
+  |{type:'media';command:string}
+  |{type:'action';name:string;args:Record<string,string>};
 export type PressIntent = { type: 'effect'; key: SignalKey; revision: number; effect: Effect }
   | { type: 'navigate'; page: number; highlight?: SignalKey }
   | {type:'button-effect';pageId:string;index:number;effect:ButtonEffect};

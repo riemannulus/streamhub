@@ -4,15 +4,16 @@ import type {PageConfig} from '../../streamdeck/pages';
 const actions={build:{exec:['/usr/bin/true','{target}'],args:{target:'[a-z]+'},sources:['demo']}};
 test('fixed button executor passes literal argv through registered bounded execution',async()=>{
   const calls:unknown[]=[];
-  const execute=createKeyActionExecutor(actions,{run:async(registry,press)=>{
-    const definition=registry.validate('__deck__',press);calls.push({exec:definition.exec,args:press.args,timeout:definition.timeoutMs});
-  }});
+  const execute=createKeyActionExecutor(actions,{
+    runProcess:async request=>{calls.push({argv:request.argv,timeout:request.timeoutMs});return{stdout:'',stderr:'',exitCode:0};},
+    run:async(registry,press)=>{const definition=registry.validate('__deck__',press);calls.push({exec:definition.exec,args:press.args,timeout:definition.timeoutMs});},
+  });
   await execute({type:'open',url:'https://example.com/?q=$(echo%20literal)'});
   await execute({type:'app',bundleId:'com.apple.Terminal'});
   await execute({type:'action',name:'build',args:{target:'main'}});
   expect(calls).toEqual([
-    {exec:['/usr/bin/open','{value}'],args:{value:'https://example.com/?q=$(echo%20literal)'},timeout:3000},
-    {exec:['/usr/bin/open','-b','{value}'],args:{value:'com.apple.Terminal'},timeout:3000},
+    {argv:['/usr/bin/open','https://example.com/?q=$(echo%20literal)'],timeout:3000},
+    {argv:['/usr/bin/open','-b','com.apple.Terminal'],timeout:3000},
     {exec:['/usr/bin/true','{target}'],args:{target:'main'},timeout:undefined},
   ]);
   expect(actions.build.sources).toEqual(['demo']);
@@ -34,7 +35,7 @@ test('action catalog contains only names and argument keys; configured actions r
 
 test('long HTTP URLs use a scoped argument limit and URL credentials are rejected',async()=>{
   let calls=0;
-  const execute=createKeyActionExecutor({}, {run:async(registry,press)=>{registry.validate('__deck__',press);calls++;}});
+  const execute=createKeyActionExecutor({}, {runProcess:async()=>{calls++;return{stdout:'',stderr:'',exitCode:0};}});
   await execute({type:'open',url:'https://example.com/?q='+'x'.repeat(1500)});expect(calls).toBe(1);
   await expect(execute({type:'open',url:'https://user:password@example.com'})).rejects.toThrow();
 });

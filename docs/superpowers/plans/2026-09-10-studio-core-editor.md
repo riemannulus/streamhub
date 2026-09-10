@@ -251,26 +251,26 @@ export const MEDIA_COMMANDS = ['play-pause','previous-track','next-track','volum
 export const KEY_CODES = ['command','option','control','shift','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9','enter','escape','tab','space','left','right','up','down','f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11','f12'] as const;
 ```
 
-- [ ] **Step 1: Write failing validation and executor tests**
+- [x] **Step 1: Write failing validation and executor tests**
 
 Cover app, absolute path, HTTPS URL, hotkey uniqueness/order, text modes, media enum, registered command, `none`, cancellation, output cap, timeout, and exactly-one invocation.
 
-- [ ] **Step 2: Run focused tests and confirm missing system action module**
+- [x] **Step 2: Run focused tests and confirm missing system action module**
 
 Run: `bun test packages/actions/system.test.ts packages/host/src/key-actions.test.ts`
 
-- [ ] **Step 3: Implement shell-free system execution**
+- [x] **Step 3: Implement shell-free system execution**
 
 - App/path/URL: `/usr/bin/open` with separate argv elements.
 - Hotkey/text/media: a compiled Swift helper under `.streamhub/native/system-actions/<source-hash>` using `CGEvent`; accept one validated JSON line on stdin and return one bounded JSON result.
 - Registered command: existing `ActionRegistry`.
 - `none`, page navigation, and page indicator: no external executor call.
 
-- [ ] **Step 4: Add permission failure semantics**
+- [x] **Step 4: Add permission failure semantics**
 
 If Accessibility permission is absent, hotkey/text returns `accessibility-permission-required`; it must not retry or partially send keys. Media keys use the supported system event path and return a distinct unsupported error if unavailable.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/actions/system.test.ts packages/host/src/key-actions.test.ts packages/host/src/presentation.test.ts`
 

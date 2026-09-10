@@ -94,7 +94,7 @@ export async function startHost(input: Config, directory: string, options: HostO
     if(config.streamdeckPlugin?.enabled){
       const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
       pluginGateway=startPluginGateway({port:config.streamdeckPlugin.port,token,onMessage:message=>{void presentation?.message(message).catch(report);}});
-      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions)});
+      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')})});
       const sessionMonitor=await startSessionMonitor(state=>{void presentation?.message({v:1,type:'lock',locked:!state.active}).catch(report);},{cacheDir:join(directory,'native')});
       const contextMonitor=await startAppContextMonitor(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
       presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};
@@ -124,7 +124,7 @@ export async function startHost(input: Config, directory: string, options: HostO
         const module = await import('./display');
         return module.startDisplay(store, directory, options);
       });
-      pendingDisplay = factory(store, directory, { signal: controller.signal, board: config.streamdeck?.board, execute:createKeyActionExecutor(config.actions) });
+      pendingDisplay = factory(store, directory, { signal: controller.signal, board: config.streamdeck?.board, execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}) });
       display=await untilAborted(pendingDisplay, controller.signal);
       checkCancelled();
     }
