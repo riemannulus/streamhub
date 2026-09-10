@@ -15657,9 +15657,29 @@ class CanvasController {
   cells = new Map;
   generation = "offline";
   input = false;
+  online = false;
+  announced = false;
   playback;
   constructor(options) {
     this.options = options;
+  }
+  ready() {
+    if (!this.online || this.announced || this.cells.size < 15)
+      return;
+    this.announced = true;
+    this.options.send({ v: 1, type: "cells-ready", deviceId: this.options.deviceId ?? "streamdeck-classic" });
+  }
+  connection(connected) {
+    if (this.online === connected)
+      return;
+    this.online = connected;
+    if (!connected) {
+      this.announced = false;
+      this.input = false;
+      this.playback?.abort();
+      return;
+    }
+    this.ready();
   }
   async appear(index, cell) {
     if (!Number.isInteger(index) || index < 0 || index > 14)
@@ -15668,13 +15688,17 @@ class CanvasController {
     const cached2 = this.options.cache.load();
     if (cached2)
       await cell.setImage(cached2.plan.frames.at(-1).keys[index]);
-    if (this.cells.size === 15)
-      this.options.send({ v: 1, type: "cells-ready", deviceId: this.options.deviceId ?? "streamdeck-classic" });
+    this.ready();
   }
-  disappear(index) {
+  disappear(index, cell) {
+    if (this.cells.get(index) !== cell)
+      return;
     this.cells.delete(index);
-    this.input = false;
-    this.playback?.abort();
+    if (this.cells.size === 0) {
+      this.announced = false;
+      this.input = false;
+      this.playback?.abort();
+    }
   }
   async receive(raw) {
     const message = parseRuntimeMessage(raw);
@@ -15764,7 +15788,10 @@ var connection2 = JSON.parse(readFileSync3(join3(shared, "connection.json"), "ut
 var token = readFileSync3(connection2.tokenFile, "utf8").trim();
 var client;
 var controller = new CanvasController({ cache: new PresentationCache(join3(shared, "cache")), send: (message) => client.send(message) });
-client = new RuntimeClient({ url: connection2.url, token, onMessage: (message) => void controller.receive(message).catch((error40) => plugin_default.logger.error(String(error40))), onStatus: (connected) => plugin_default.logger.info(connected ? "Runtime connected" : "Runtime disconnected") });
+client = new RuntimeClient({ url: connection2.url, token, onMessage: (message) => void controller.receive(message).catch((error40) => plugin_default.logger.error(String(error40))), onStatus: (connected) => {
+  controller.connection(connected);
+  plugin_default.logger.info(connected ? "Runtime connected" : "Runtime disconnected");
+} });
 var indexOf = (event) => (event.action.isKey?.() ?? true) && event.action.coordinates ? event.action.coordinates.row * 5 + event.action.coordinates.column : undefined;
 var _dec = [
   action({ UUID: "com.streamhub.studio.canvas-cell" })
@@ -15781,7 +15808,7 @@ class CanvasCell extends _base {
   onWillDisappear(event) {
     const index = indexOf(event);
     if (index !== undefined)
-      controller.disappear(index);
+      controller.disappear(index, event.action);
   }
   onKeyDown(event) {
     const index = indexOf(event);

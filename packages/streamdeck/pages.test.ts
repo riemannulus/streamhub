@@ -239,7 +239,7 @@ test('Studio v2 adapter reuses stable region allocation and fixed effects',()=>{
 test('Studio background-only pages do not cover the canvas with empty pagination controls',()=>{
   const doc=defaultStudioDocument();doc.pages[0].buttons=[{index:0,type:'app',bundleId:'org.mozilla.firefox'}];
   const board=new PageBoard(studioDocumentToPageConfig(doc));
-  expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty')]);
+  expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty' as const)]);
 });
 
 test('single-page Studio regions keep inactive global navigation transparent',()=>{
