@@ -350,6 +350,7 @@ export class PageBoard{
     if(!['running','success','error'].includes(status))throw new Error('Invalid action status');
     this.actionStatus.set(JSON.stringify([pageId,index]),{status,...(message?{message:message.slice(0,80)}:{})});
   }
+  clearRunningActionStatuses():void{for(const [key,value] of this.actionStatus)if(value.status==='running')this.actionStatus.delete(key);}
   cancelInput(index?:number):void{
     if(index===undefined)this.held.clear();else this.held.delete(index);
     for(const deck of this.allDecks())deck.cancelInput(index);

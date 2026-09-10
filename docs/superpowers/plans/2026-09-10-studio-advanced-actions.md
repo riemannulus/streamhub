@@ -263,11 +263,11 @@ Commit: `feat(studio): author advanced key behavior`
 - Create: `docs/validation/studio-advanced-actions.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Build an automated gesture-to-effect integration test**
+- [x] **Step 1: Build an automated gesture-to-effect integration test**
 
 Use a fake plugin clock and fake leaf executor. Verify sequential, parallel, delay, toggle restart persistence, press/double/hold exclusivity, page-change cancellation, lock cancellation, disconnect cancellation, and exactly-once leaf calls.
 
-- [ ] **Step 2: Run all automated gates**
+- [x] **Step 2: Run all automated gates**
 
 Run: `bun test packages/host/src/advanced-actions.integration.test.ts && bun run check && bun run streamdeck:plugin:check && git diff --check`
 

@@ -6,7 +6,7 @@ import {DeckVisualRenderer} from '../../presentation/render';
 import {TransitionCompiler} from '../../presentation/transitions';
 import {StudioRepository,type StudioSnapshot} from '../../studio/repository';
 import {primaryButtonAction,type ActionProgram,type ButtonAction,type ButtonDefinition,type StudioDocument} from '../../studio/document';
-import {executeProgram,type ActionResult} from '../../actions/composite';
+import {executeProgram,type ActionResult,type ProgramContext} from '../../actions/composite';
 import {MemoryButtonStateStore,buttonStateKey,type ButtonStateStore} from './button-state';
 import type {SignalStore} from './store';
 
@@ -23,13 +23,13 @@ function publicFailure(error:unknown):string{
   return '실행 실패';
 }
 
-export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void}}):Promise<PresentationService>{
+export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void};sleep?:ProgramContext['sleep']}):Promise<PresentationService>{
   const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),compiler=new TransitionCompiler(),executions=new Set<AbortController>(),buttonState=options.buttonState??new MemoryButtonStateStore();
   let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,generation=0,currentGeneration:string|undefined,locked=false,closed=false,revision=options.store.state().revision,polling=false;
   const validStateKeys=()=>new Set(snapshot.document.pages.flatMap(page=>(page.buttons??[]).map(button=>buttonStateKey({documentId:snapshot.document.id,pageId:page.id,buttonId:button.id}))));
   await buttonState.prune(validStateKeys());
   board.update(options.store.records());
-  const cancelExecutions=()=>{for(const controller of executions)controller.abort();};
+  const cancelExecutions=()=>{for(const controller of executions)controller.abort();board.clearRunningActionStatuses();};
   const currentButton=(index:number)=>{const pageId=board.page().viewId??snapshot.document.defaultPageId,page=snapshot.document.pages.find(item=>item.id===pageId);return{pageId,button:page?.buttons?.find(item=>item.index===index)};};
   const navigation=(action:ButtonAction):action is Extract<ButtonAction,{type:'go-to-page'|'previous-page'|'next-page'|'resume-auto-page'}>=>['go-to-page','previous-page','next-page','resume-auto-page'].includes(action.type);
   const effect=(action:ButtonAction):ButtonEffect|undefined=>action.type==='open-app'?{type:'app',bundleId:action.bundleId}:action.type==='open-path'?{type:'path',path:action.path}:action.type==='open-url'?{type:'open',url:action.url,...(action.browserBundleId?{browserBundleId:action.browserBundleId}:{})}:action.type==='hotkey'?{type:'hotkey',keys:action.keys}:action.type==='text'?action:action.type==='media'?action:action.type==='registered'?{type:'action',name:action.name,args:action.args}:undefined;
@@ -61,7 +61,7 @@ export async function startPresentationService(options:{store:SignalStore;direct
     const singleNavigation=program.type==='single'&&navigation(program.action);
     if(!singleNavigation){board.setActionStatus(pageId,button.index,'running');await publish('refresh');}
     if(locked||closed)return;const controller=new AbortController();executions.add(controller);let result:ActionResult,navigated=false;
-    try{result=await executeProgram(resolved,{signal:controller.signal,run:async(action,signal)=>{
+    try{result=await executeProgram(resolved,{signal:controller.signal,...(options.sleep?{sleep:options.sleep}:{}),run:async(action,signal)=>{
       if(navigation(action)){const moved=board.navigateAction(action);navigated ||= moved;return moved?{ok:true}:{ok:false,code:'navigation-unavailable',message:'Page navigation is unavailable'};}
       const mapped=effect(action);if(!mapped)return{ok:false,code:'not-executable',message:'Action is not executable'};
       try{await options.execute(mapped,signal);return{ok:true};}catch(error){return{ok:false,code:typeof (error as {code?:unknown})?.code==='string'?(error as {code:string}).code:'execution-failed',message:publicFailure(error)};}
