@@ -4,9 +4,12 @@ import type {StudioDocument} from '../studio/document';
 export const BUILTIN_ICONS=['terminal','folder','check','alert','play','link'] as const;
 export type BuiltinIcon=typeof BUILTIN_ICONS[number];
 export type ButtonStyle={color?:string;icon?:BuiltinIcon};
-export type PageButton = ButtonStyle & (
+export type PageButton = ButtonStyle & {buttonId?:string} & (
   | {index:number;type:'page';pageId:string;label?:string}
   | {index:number;type:'auto';label?:string}
+  | {index:number;type:'previous-page';label?:string}
+  | {index:number;type:'next-page';label?:string}
+  | {index:number;type:'page-indicator';label?:string}
   | {index:number;type:'text';label:string}
   | {index:number;type:'open';url:string;label?:string}
   | {index:number;type:'app';bundleId:string;label?:string}
@@ -22,12 +25,15 @@ export type PageContext = {appBundleId:string|null;available:boolean;windowTitle
 export function studioDocumentToPageConfig(document:StudioDocument):PageConfig{
   const project=(button:StudioDocument['pages'][number]['buttons'] extends (infer T)[]|undefined?T:never):PageButton=>{
     const label=button.appearance.label?.text,style=button.appearance.background?.color?{color:button.appearance.background.color}:{};
-    const common={index:button.index,...style,...(label?{label}:{})};
+    const common={buttonId:button.id,index:button.index,...style,...(label?{label}:{})};
     const action=button.action;
     if(action.type==='open-app')return{...common,type:'app',bundleId:action.bundleId};
     if(action.type==='open-url')return{...common,type:'open',url:action.url};
     if(action.type==='registered')return{...common,type:'action',name:action.name,args:action.args};
     if(action.type==='go-to-page')return{...common,type:'page',pageId:action.pageId};
+    if(action.type==='previous-page')return{...common,type:'previous-page'};
+    if(action.type==='next-page')return{...common,type:'next-page'};
+    if(action.type==='page-indicator')return{...common,type:'page-indicator'};
     if(action.type==='resume-auto-page')return{...common,type:'auto'};
     return{index:button.index,type:'text',label:label??' ',...style};
   };
@@ -94,20 +100,22 @@ export function validatePageConfig(raw:unknown):PageConfig{
       const positions=new Set<number>();
       page.buttons=value.buttons.map(rawButton=>{
         const button=object(rawButton);
-        if(!['page','auto','text','open','app','action'].includes(button.type as string))throw new Error('Invalid page button type');
-        exact(button,['index','type','label','color','icon',...(button.type==='page'?['pageId']:button.type==='open'?['url']:button.type==='app'?['bundleId']:button.type==='action'?['name','args']:[])]);
+        if(!['page','auto','previous-page','next-page','page-indicator','text','open','app','action'].includes(button.type as string))throw new Error('Invalid page button type');
+        exact(button,['buttonId','index','type','label','color','icon',...(button.type==='page'?['pageId']:button.type==='open'?['url']:button.type==='app'?['bundleId']:button.type==='action'?['name','args']:[])]);
         if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||positions.has(button.index as number))throw new Error('Invalid or duplicate button index');
         const index=button.index as number;positions.add(index);
         const label=button.label===undefined?undefined:text(button.label,80);
         const style:ButtonStyle={};
         if(button.color!==undefined){if(typeof button.color!=='string'||!/^#[0-9a-f]{6}$/i.test(button.color))throw new Error('Invalid button color');style.color=button.color;}
         if(button.icon!==undefined){if(typeof button.icon!=='string'||!BUILTIN_ICONS.includes(button.icon as BuiltinIcon))throw new Error('Invalid builtin icon');style.icon=button.icon as BuiltinIcon;}
-        const common={index,...style,...(label===undefined?{}:{label})};
+        const buttonId=button.buttonId===undefined?undefined:id(button.buttonId);
+        const common={index,...style,...(buttonId===undefined?{}:{buttonId}),...(label===undefined?{}:{label})};
         if(button.type==='open'){const url=new URL(text(button.url,2048));if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('Invalid button URL');return{...common,type:'open',url:url.href};}
         if(button.type==='app'){const bundleId=text(button.bundleId,255);if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(bundleId))throw new Error('Invalid app bundle ID');return{...common,type:'app',bundleId};}
         if(button.type==='action'){const args=object(button.args);if(Object.keys(args).length>32)throw new Error('Too many action arguments');return{...common,type:'action',name:text(button.name,128),args:Object.fromEntries(Object.entries(args).map(([key,value])=>[text(key,128),text(value,512)]))};}
-        if(button.type==='text')return{index,type:'text',label:text(button.label,80),...style};
+        if(button.type==='text')return{index,type:'text',label:text(button.label,80),...style,...(buttonId===undefined?{}:{buttonId})};
         if(button.type==='page')return{index,type:'page',pageId:id(button.pageId),...style,...(label===undefined?{}:{label})};
+        if(button.type==='previous-page'||button.type==='next-page'||button.type==='page-indicator')return{index,type:button.type,...style,...(label===undefined?{}:{label})};
         return{index,type:'auto',...style,...(label===undefined?{}:{label})};
       });
     }
@@ -135,6 +143,7 @@ export function validatePageConfig(raw:unknown):PageConfig{
 }
 
 export type PageSelection={target?:string;reason:string;unknown:boolean};
+type FixedBinding={pageId:string;buttonId:string;action:PageButton['type']};
 /** A known mismatch defeats an unknown field in the same AND rule. */
 export function choosePage(config:PageConfig,context:PageContext):PageSelection{
   if(!context.available)return{reason:'문맥 미확인 · 현재 페이지 유지',unknown:true};
@@ -162,7 +171,7 @@ export class PageBoard{
   private manual=false;
   private epoch=0;
   private innerEpoch=0;
-  private held=new Map<number,{epoch:number;cell:DeckKey}>();
+  private held=new Map<number,{epoch:number;cell:DeckKey;fixed?:FixedBinding}>();
   private blocked=false;
   private candidate:string|undefined;
   private candidateSince=0;
@@ -273,6 +282,8 @@ export class PageBoard{
       let key:DeckKey;
       if(button.type==='page')key={type:'tile',index:button.index,label:button.label??this.config.pages.find(page=>page.id===button.pageId)!.title,color:'#62a9ff',enabled:true};
       else if(button.type==='auto')key={type:'tile',index:button.index,label:button.label??'자동',foot:this.manual?'수동 고정':'자동 모드',color:'#76c8a1',enabled:true};
+      else if(button.type==='previous-page'||button.type==='next-page'){const current=this.config.pages.findIndex(page=>page.id===this.current),target=current+(button.type==='previous-page'?-1:1);key={type:'tile',index:button.index,label:button.label??(button.type==='previous-page'?'이전 페이지':'다음 페이지'),color:'#62a9ff',enabled:target>=0&&target<this.config.pages.length};}
+      else if(button.type==='page-indicator')key={type:'tile',index:button.index,label:`${this.config.pages.findIndex(page=>page.id===this.current)+1} / ${this.config.pages.length}`,enabled:false};
       else if(button.type==='text')key={type:'tile',index:button.index,label:button.label,enabled:false};
       else key={type:'tile',index:button.index,label:button.label??(button.type==='open'?new URL(button.url).hostname:button.type==='app'?button.bundleId:button.name),enabled:true,color:'#426087'};
       if(button.color!==undefined)key.color=button.color;
@@ -287,7 +298,8 @@ export class PageBoard{
     if(!Number.isInteger(index)||index<0||index>=15||this.held.has(index))return;
     const frame=this.page();
     if(this.actionStatus.get(JSON.stringify([this.current,index]))?.status==='running')return;
-    this.held.set(index,{epoch:this.blocked?-1:frame.epoch,cell:frame.keys[index]!});
+    const fixed=this.definition.buttons?.find(button=>button.index===index);
+    this.held.set(index,{epoch:this.blocked?-1:frame.epoch,cell:frame.keys[index]!,...(fixed?{fixed:{pageId:this.current,buttonId:fixed.buttonId??`${this.current}:${fixed.index}`,action:fixed.type}}:{})});
     if(!this.definition.buttons?.some(button=>button.index===index)&&!(this.definition.regions?.length&&(index===10||index===14)))this.inputDeck(index).down(index);
   }
   up(index:number):PressIntent|undefined{
@@ -295,14 +307,16 @@ export class PageBoard{
     this.held.delete(index);if(!this.held.size)this.blocked=false;
     if(blocked||!binding||binding.epoch!==frame.epoch||JSON.stringify(binding.cell)!==JSON.stringify(frame.keys[index])){for(const deck of this.parts())deck.cancelInput(index);return;}
     const button=this.definition.buttons?.find(button=>button.index===index);
+    if(binding.fixed&&(binding.fixed.pageId!==this.current||binding.fixed.buttonId!==(button?.buttonId??`${this.current}:${index}`)||binding.fixed.action!==button?.type))return;
     if(button){
-      if(button.type==='text')return;
+      if(button.type==='text'||button.type==='page-indicator')return;
       if(button.type==='open'||button.type==='app'||button.type==='action'){
         this.setActionStatus(this.current,index,'running');
         const effect=button.type==='open'?{type:'open' as const,url:button.url}:button.type==='app'?{type:'app' as const,bundleId:button.bundleId}:{type:'action' as const,name:button.name,args:{...button.args}};
         return{type:'button-effect',pageId:this.current,index,effect};
       }
       if(button.type==='page'){this.manual=true;this.select(button.pageId);}
+      else if(button.type==='previous-page'||button.type==='next-page'){const current=this.config.pages.findIndex(page=>page.id===this.current),target=current+(button.type==='previous-page'?-1:1);if(target<0||target>=this.config.pages.length)return;this.manual=true;this.select(this.config.pages[target]!.id);}
       else{this.manual=false;this.route();}
       return{type:'navigate',page:this.page().index};
     }

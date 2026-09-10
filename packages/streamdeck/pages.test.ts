@@ -241,3 +241,31 @@ test('Studio background-only pages do not cover the canvas with empty pagination
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty' as const)]);
 });
+
+test('Studio v3 navigation actions move outer pages, pin manual selection and render an indicator',()=>{
+  const navigation=(prefix:string)=>[
+    {id:`${prefix}-previous`,index:10,action:{type:'previous-page' as const},appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-next`,index:11,action:{type:'next-page' as const},appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-media`,index:12,action:{type:'go-to-page' as const,pageId:'media'},appearance:{contentMode:'hidden' as const}},
+    {id:`${prefix}-indicator`,index:13,action:{type:'page-indicator' as const},appearance:{contentMode:'label-only' as const,label:{text:'0 / 0',position:'center' as const,size:'medium' as const,color:'#ffffff'}}},
+    {id:`${prefix}-auto`,index:14,action:{type:'resume-auto-page' as const},appearance:{contentMode:'hidden' as const}},
+  ];
+  const document=defaultStudioDocument();document.pages=[{id:'home',title:'홈',buttons:navigation('home')},{id:'web',title:'웹',match:{appBundleId:'org.mozilla.firefox'},buttons:navigation('web')},{id:'media',title:'미디어',buttons:navigation('media')}];
+  const board=new PageBoard(studioDocumentToPageConfig(document));
+  expect(board.page().keys[13]).toMatchObject({type:'tile',label:'1 / 3',enabled:false});
+  expect(click(board,10)).toBeUndefined();expect(board.page().viewId).toBe('home');
+  expect(click(board,11)).toMatchObject({type:'navigate'});expect(board.page().viewId).toBe('web');expect(board.exportLayout().manual).toBe(true);
+  board.context({available:true,appBundleId:'unknown'},0);board.context({available:true,appBundleId:'unknown'},500);expect(board.page().viewId).toBe('web');
+  click(board,12);expect(board.page().viewId).toBe('media');expect(board.page().keys[13]).toMatchObject({label:'3 / 3'});
+  expect(click(board,11)).toBeUndefined();expect(board.page().viewId).toBe('media');
+  board.context({available:true,appBundleId:'org.mozilla.firefox'},1000);board.context({available:true,appBundleId:'org.mozilla.firefox'},1250);click(board,14);expect(board.page().viewId).toBe('web');expect(board.exportLayout().manual).toBe(false);
+});
+
+test('outer navigation cancels a held binding when automatic context changes the page',()=>{
+  const document=defaultStudioDocument();document.pages=[
+    {id:'home',title:'홈',buttons:[{id:'next',index:0,action:{type:'next-page'},appearance:{contentMode:'hidden'}}]},
+    {id:'web',title:'웹',match:{appBundleId:'org.mozilla.firefox'}},
+  ];
+  const board=new PageBoard(studioDocumentToPageConfig(document));board.down(0);board.context({available:true,appBundleId:'org.mozilla.firefox'},0);board.context({available:true,appBundleId:'org.mozilla.firefox'},250);
+  expect(board.up(0)).toBeUndefined();expect(board.page().viewId).toBe('web');
+});

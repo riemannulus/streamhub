@@ -161,7 +161,7 @@ Commit: `feat(studio): share button composition with runtime`
 - Consumes: v3 `ButtonAction` navigation variants.
 - Produces: page-order navigation and read-only page indicator through the existing `PageBoard.down/up/page` contract.
 
-- [ ] **Step 1: Write failing page tests**
+- [x] **Step 1: Write failing page tests**
 
 ```ts
 expect(board.page().keys[12]).toMatchObject({type:'tile', label:'1 / 3', enabled:false});
@@ -173,19 +173,19 @@ expect(board.page().viewId).toBe('home');
 
 Cover boundary no-op, direct target, manual pinning, `resume-auto-page`, stale down/up cancellation, deleted/unknown target rejection, and distinction from dynamic list pagination.
 
-- [ ] **Step 2: Run the focused tests and confirm the new action variants fail validation**
+- [x] **Step 2: Run the focused tests and confirm the new action variants fail validation**
 
 Run: `bun test packages/streamdeck/pages.test.ts`
 
-- [ ] **Step 3: Project v3 buttons into `PageBoard` without losing appearance identity**
+- [x] **Step 3: Project v3 buttons into `PageBoard` without losing appearance identity**
 
 Add an internal `FixedBinding` containing `{pageId, buttonId, action}`. `page-indicator` renders `${outerIndex + 1} / ${pageCount}` and never yields an effect.
 
-- [ ] **Step 4: Keep presentation input gating unchanged**
+- [x] **Step 4: Keep presentation input gating unchanged**
 
 Navigation returns only a page intent; `startPresentationService` publishes trigger `page`, cancels the old generation, and does not call the external effect executor.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/streamdeck/pages.test.ts packages/host/src/presentation.test.ts`
 
