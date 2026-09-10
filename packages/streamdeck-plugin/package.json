@@ -1,0 +1,1 @@
+{"name":"streamhub-streamdeck-plugin","private":true,"type":"module","scripts":{"generate":"bun scripts/generate-assets.ts","build":"bun run generate && bun build src/plugin.ts --target=node --outfile=com.streamhub.studio.sdPlugin/bin/plugin.js","check":"bun test src && bunx tsc --noEmit && bun run build"},"dependencies":{"@elgato/streamdeck":"2.1.2"}}

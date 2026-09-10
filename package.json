@@ -20,6 +20,9 @@
     "hid:lifecycle-check": "bun scripts/hid-lifecycle-check.ts",
     "hid:pages-check": "bun scripts/hid-pages-check.ts",
     "build": "bun scripts/build.ts"
+    ,"streamdeck:setup":"bun scripts/setup-streamdeck-plugin.ts"
+    ,"streamdeck:plugin:build":"bun run --cwd packages/streamdeck-plugin build"
+    ,"streamdeck:plugin:check":"bun run --cwd packages/streamdeck-plugin check"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
@@ -27,6 +30,7 @@
   },
   "dependencies": {
     "@elgato-stream-deck/node": "7.6.3",
+    "@elgato/streamdeck":"2.1.2",
     "sharp": "0.34.5"
   }
 }
