@@ -1,7 +1,7 @@
 import {validateButtonActions} from './key-actions';
 import { randomUUID } from 'node:crypto';
 import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { ActionRegistry, type ActionDefinition } from './actions';
 import { validatePageConfig, validatePageSources, type PageConfig } from '../../streamdeck/pages';
 
@@ -10,6 +10,7 @@ export type AuthConfig = { adminToken: string; sources: Record<string, SourceCon
 export type Config = AuthConfig & {
   port: number;
   streamdeck?: { enabled: boolean; board?: PageConfig };
+  streamdeckPlugin?: {enabled:boolean;port:number;tokenFile:string};
   actions?: Record<string, ActionDefinition>;
   collectors?: Array<{ source: string; exec: string[]; intervalMs: number; timeoutMs?: number }>;
 };
@@ -40,6 +41,9 @@ export function validateConfig(input: unknown): Config {
       const board = validatePageConfig(config.streamdeck.board);
       validatePageSources(board,Object.keys(config.sources));
     }
+  }
+  if(config.streamdeckPlugin!==undefined){
+    if(!record(config.streamdeckPlugin)||typeof config.streamdeckPlugin.enabled!=='boolean'||!Number.isInteger(config.streamdeckPlugin.port)||(config.streamdeckPlugin.port as number)<1||(config.streamdeckPlugin.port as number)>65535||typeof config.streamdeckPlugin.tokenFile!=='string'||!isAbsolute(config.streamdeckPlugin.tokenFile)||Object.keys(config.streamdeckPlugin).some(key=>!['enabled','port','tokenFile'].includes(key)))throw new Error('Invalid streamdeckPlugin config');
   }
   if (config.actions !== undefined) {
     if (!record(config.actions)) throw new Error('Invalid actions');

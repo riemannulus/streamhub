@@ -96,3 +96,10 @@ test('fixed action buttons validate registered names and arguments before startu
   expect(()=>validateConfig(invalid)).toThrow();
   expect(config.actions.build.sources).toEqual(['demo']);
 });
+
+test('plugin-only config requires an absolute private token path and valid port',()=>{
+  const base={port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}}};
+  expect(validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'/tmp/streamhub-token'}}).streamdeckPlugin?.enabled).toBe(true);
+  expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'relative'}})).toThrow();
+  expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:0,tokenFile:'/tmp/token'}})).toThrow();
+});

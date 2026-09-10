@@ -3,8 +3,10 @@ import { SignalStore } from './store';
 import { ActionRegistry } from './actions';
 import { exact, HttpError, object, parseLive, readJson, text } from './validation';
 import { validateAuthConfig, type SourceConfig } from './config';
+import type {StudioDocument} from '../../studio/document';
+import type {StudioSnapshot} from '../../studio/repository';
 export type { SourceConfig } from './config';
-export type ServerOptions = { store: SignalStore; port?: number; adminToken: string; sources: Record<string, SourceConfig>; actions?: ActionRegistry; health?: () => unknown; display?:()=>unknown };
+export type ServerOptions = { store: SignalStore; port?: number; adminToken: string; sources: Record<string, SourceConfig>; actions?: ActionRegistry; health?: () => unknown; display?:()=>unknown;studio?:{snapshot():StudioSnapshot;apply(document:StudioDocument,expectedVersion:string):Promise<StudioSnapshot>;status():unknown} };
 function authorize(request: Request, token?: string) {
   const supplied = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
   if (!token || Buffer.byteLength(supplied) !== Buffer.byteLength(token) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(token))) throw new HttpError(401, 'Unauthorized');
@@ -23,6 +25,12 @@ export function startServer(options: ServerOptions) {
           authorize(request, options.adminToken);
           const state = store.state();
           return Response.json({ revision: state.revision, records: state.records, health: options.health?.() ?? [], display:options.display?.() }, { headers: { 'cache-control': 'no-store' } });
+        }
+        if(path==='/v1/studio'&&request.method==='GET'){
+          authorize(request,options.adminToken);if(!options.studio)throw new HttpError(404,'Studio presentation is disabled');return Response.json({...options.studio.snapshot(),runtimeStatus:options.studio.status()},{headers:{'cache-control':'no-store'}});
+        }
+        if(path==='/v1/studio/apply'&&request.method==='POST'){
+          authorize(request,options.adminToken);if(!options.studio)throw new HttpError(404,'Studio presentation is disabled');const body=object(await readJson(request));exact(body,['document','expectedVersion']);if(typeof body.expectedVersion!=='string')throw new HttpError(400,'Invalid expectedVersion');try{return Response.json(await options.studio.apply(body.document as StudioDocument,body.expectedVersion));}catch(error){if((error as Error).name==='StudioVersionConflictError')throw new HttpError(409,'Studio document version conflict');throw error;}
         }
         const route = /^\/v1\/sources\/([a-z0-9_-]+)\/signals(?:\/(.+))?$/.exec(path);
         if (!route) throw new HttpError(404, 'Not found');

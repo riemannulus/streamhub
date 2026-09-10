@@ -1,12 +1,15 @@
 import {createKeyActionExecutor} from './key-actions';
 import type {ButtonEffect} from '../../streamdeck';
 import { join } from 'node:path';
+import {readFileSync,statSync} from 'node:fs';
 import { ActionRegistry } from './actions';
 import { validateConfig, type Config } from './config';
 import { Reconciler, type Membership } from './reconciler';
 import { startServer, type ServerOptions } from './server';
 import { SignalStore } from './store';
 import type { PageConfig } from '../../streamdeck/pages';
+import {startPluginGateway,type PluginGateway} from './plugin-gateway';
+import {startPresentationService,type PresentationService} from './presentation';
 
 type Collector = NonNullable<Config['collectors']>[number];
 type HostServer = { url: URL; stop(closeActiveConnections?: boolean): void | Promise<void> };
@@ -44,6 +47,8 @@ export async function startHost(input: Config, directory: string, options: HostO
   let server: HostServer | undefined;
   let display: HostDisplay | undefined;
   let pendingDisplay: Promise<HostDisplay> | undefined;
+  let pluginGateway:PluginGateway|undefined;
+  let presentation:PresentationService|undefined;
   let startupFailure:unknown;
   let closed = false;
   let stopping: Promise<void> | undefined;
@@ -61,7 +66,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       // handle has been acquired and disposed, rather than orphaning it on exit.
       let pendingFailure:unknown;
       if(pendingDisplay){try{display=await pendingDisplay;}catch(error){pendingFailure=error;}}
-      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop())]);
+      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginGateway?.stop())]);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => server?.stop(true))]));
       results.push(...await Promise.allSettled([...jobs]));
       results.push(...await Promise.allSettled([Promise.resolve().then(() => store?.close())]));
@@ -83,7 +88,12 @@ export async function startHost(input: Config, directory: string, options: HostO
     store = (dependencies.openStore ?? (path => new SignalStore(path)))(join(directory, 'state.sqlite'));
     checkCancelled();
     const reconciler = new Reconciler(store, actions, Object.fromEntries(Object.entries(config.sources).map(([source, value]) => [source, value.allowedHosts ?? []])));
-    server = (dependencies.serve ?? startServer)({ store, port: config.port, adminToken: config.adminToken, sources: config.sources, actions, health: () => reconciler.health(), display: () => display?.status() });
+    if(config.streamdeckPlugin?.enabled){
+      const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
+      pluginGateway=startPluginGateway({port:config.streamdeckPlugin.port,token,onMessage:message=>{void presentation?.message(message).catch(report);}});
+      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions)});
+    }
+    server = (dependencies.serve ?? startServer)({ store, port: config.port, adminToken: config.adminToken, sources: config.sources, actions, health: () => reconciler.health(), display: () => presentation?.status()??display?.status(),...(presentation?{studio:presentation}:{}) });
     checkCancelled();
     for (const { collector, runner } of collectors) {
       const tick = () => {
