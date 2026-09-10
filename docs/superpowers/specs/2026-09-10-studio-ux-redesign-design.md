@@ -1,7 +1,12 @@
 # Streamhub Studio 캔버스 중심 UX 개편 설계
 
+> 이 문서의 설정 호환, 직접 HID 장치 적용, 수명주기와 대기화면 결정은
+> `2026-09-10-streamdeck-plugin-only-architecture-design.md`로 대체되었다.
+> 이 문서는 캔버스 중심 UX 원칙과 화면 구조 참고용이며, 구현은 새 문서의
+> Stream Deck App 플러그인 전용 경로와 초기화된 `StudioDocument v2`를 따른다.
+
 - 작성일: 2026-09-10
-- 상태: 사용자 검토 대기
+- 상태: 일부 대체됨 · UX 참고용
 - 범위: Studio 편집 경험, 시각 자산, 실제 장치 적용, 대기화면
 
 ## 결정 요약
