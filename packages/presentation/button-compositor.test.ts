@@ -42,6 +42,12 @@ describe('composeButton',()=>{
     expect((await sharp(result).metadata()).channels).toBe(4);
   });
 
+  test('toggle runtime state produces distinct on and off badges',async()=>{
+    const background=await png('#101010'),appearance:ButtonAppearance={contentMode:'label-only',label},assets=reader({});
+    const off=await composeButton({appearance,background,assets,runtime:{toggle:'off'}}),on=await composeButton({appearance,background,assets,runtime:{toggle:'on'}});
+    expect(hash(off)).not.toBe(hash(on));
+  });
+
   test('rejects backgrounds that are not opaque 72 by 72 PNGs',async()=>{
     await expect(composeButton({appearance:{contentMode:'hidden'},background:await png('#000000',71,72),assets:reader({})})).rejects.toThrow('72×72');
   });

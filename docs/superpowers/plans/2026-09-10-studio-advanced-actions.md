@@ -197,23 +197,23 @@ export interface ButtonStateStore {
 }
 ```
 
-- [ ] **Step 1: Write persistence and crash-safety tests**
+- [x] **Step 1: Write persistence and crash-safety tests**
 
 Use a temporary directory. Cover missing file, invalid quarantined file, restart persistence, two rapid updates serialized in order, document reset namespace separation, and pruning deleted buttons.
 
-- [ ] **Step 2: Implement an atomic sidecar store**
+- [x] **Step 2: Implement an atomic sidecar store**
 
 Write `.streamhub/button-state.json.tmp`, fsync, and rename to `.streamhub/button-state.json`. Keys are `documentId/pageId/buttonId`; do not store action definitions. Cap entries at 4,096 and reject path-like IDs.
 
-- [ ] **Step 3: Commit toggle changes only after successful execution**
+- [x] **Step 3: Commit toggle changes only after successful execution**
 
 Resolve the current state, execute the matching sequence, then persist the opposite state only for `{ok:true}`. An aborted, failed, or stale action leaves the value unchanged.
 
-- [ ] **Step 4: Expose toggle state to the compositor**
+- [x] **Step 4: Expose toggle state to the compositor**
 
 Add `runtime.toggle` to `ComposeButtonInput`; allow the Studio inspector to preview `off` and `on`, but never let preview writes affect Runtime state.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/host/src/button-state.test.ts packages/host/src/runtime.test.ts packages/presentation/button-compositor.test.ts`
 

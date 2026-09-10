@@ -96,11 +96,11 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
           if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
           try{
             const payload=await request.json() as Record<string,unknown>;
-            if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).some(key=>!['index','pageAppearance','appearance'].includes(key)))throw new Error('Invalid preview request');
+            if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).some(key=>!['index','pageAppearance','appearance','toggle'].includes(key))||(payload.toggle!==undefined&&payload.toggle!=='off'&&payload.toggle!=='on'))throw new Error('Invalid preview request');
             if(!Number.isInteger(payload.index)||(payload.index as number)<0||(payload.index as number)>14)throw new Error('Invalid key index');
             const document=defaultStudioDocument({id:'00000000-0000-4000-8000-000000000001'});document.pages[0].appearance=payload.pageAppearance as never;document.pages[0].buttons=[{id:'preview',index:payload.index as number,behavior:singlePressBehavior({type:'none'}),appearance:payload.appearance as never}];
             const validated=validateStudioDocument(document),background=await renderStudioBackground(validated.pages[0].appearance,repository.assets),crop=(await extractKeyPngs(background))[payload.index as number]!;
-            const image=await composeButton({appearance:validated.pages[0].buttons![0].appearance,background:crop,assets:repository.assets});
+            const image=await composeButton({appearance:validated.pages[0].buttons![0].appearance,background:crop,assets:repository.assets,...(payload.toggle?{runtime:{toggle:payload.toggle as 'off'|'on'}}:{})});
             return new Response(new Uint8Array(image),{headers:{...headers,'Content-Type':'image/png'}});
           }catch(error){return json({error:error instanceof Error?error.message:'미리보기를 만들지 못했습니다.'},400);}
         }

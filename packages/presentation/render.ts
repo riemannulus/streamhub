@@ -17,13 +17,13 @@ export async function renderStudioBackground(appearance:StudioAppearance|undefin
 }
 
 export class DeckVisualRenderer{
-  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader):Promise<DeckCanvas>{return this.renderAppearance(page.appearance,deckPage,page,assets);}
+  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckCanvas>{return this.renderAppearance(page.appearance,deckPage,page,assets,state);}
   async renderStandby(document:StudioDocument,assets:AssetReader):Promise<DeckCanvas>{const empty:DeckPage={index:0,pageCount:1,epoch:0,keys:Array.from({length:15},(_,index)=>({type:'empty',index}))};return this.renderAppearance(document.standby,empty,undefined,assets);}
-  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader):Promise<DeckCanvas>{
+  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckCanvas>{
     const background=await renderStudioBackground(appearance,assets),crops=await extractKeyPngs(background),overlays:sharp.OverlayOptions[]=[];
     for(const key of deckPage.keys){
       const fixed=page?.buttons?.find(button=>button.index===key.index);let input:Buffer|undefined;
-      if(fixed){const runtime=key.type==='tile'?{label:key.label,...(key.foot?{detail:key.foot}:{})}:undefined;input=await composeButton({appearance:fixed.appearance,background:crops[key.index]!,assets,...(runtime?{runtime}:{})});}
+      if(fixed){const toggle=page&&state?.toggle(page.id,fixed.id),runtime=key.type==='tile'?{label:key.label,...(key.foot?{detail:key.foot}:{}),...(toggle?{toggle}:{})}:toggle?{toggle}:undefined;input=await composeButton({appearance:fixed.appearance,background:crops[key.index]!,assets,...(runtime?{runtime}:{})});}
       else if(key.type!=='empty')input=await sharp(await renderKey(key,deckPage),{raw:{width:72,height:72,channels:3}}).ensureAlpha().png().toBuffer();
       if(input)overlays.push({input,left:keyViewport(key.index).left,top:keyViewport(key.index).top});
     }

@@ -6,7 +6,7 @@ export type ComposeButtonInput={
   appearance:ButtonAppearance;
   background:Buffer;
   assets:AssetReader;
-  runtime?:{label?:string;detail?:string;badge?:string};
+  runtime?:{label?:string;detail?:string;badge?:string;toggle?:'off'|'on'};
 };
 
 const escapeXml=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[character]!));
@@ -55,6 +55,6 @@ export async function composeButton(input:ComposeButtonInput):Promise<Buffer>{
   const background=await buttonBackground(input.appearance,input.assets);if(background)overlays.push({input:background,left:0,top:0});
   const icon=await iconLayer(input.appearance,input.assets);if(icon)overlays.push(icon);
   const text=textLayer(input.appearance,input.runtime);if(text)overlays.push({input:text,left:0,top:0});
-  const badge=badgeLayer(input.runtime?.badge);if(badge)overlays.push({input:badge,left:0,top:0});
+  const badge=badgeLayer(input.runtime?.badge??input.runtime?.toggle?.toUpperCase());if(badge)overlays.push({input:badge,left:0,top:0});
   return sharp(input.background).ensureAlpha().composite(overlays).png().toBuffer();
 }

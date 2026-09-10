@@ -12,6 +12,7 @@ import {startPluginGateway,type PluginGateway} from './plugin-gateway';
 import {startPresentationService,type PresentationService} from './presentation';
 import {startSessionMonitor} from './session-monitor';
 import {startAppContextMonitor} from './app-context';
+import {FileButtonStateStore} from './button-state';
 
 type Collector = NonNullable<Config['collectors']>[number];
 type HostServer = { url: URL; stop(closeActiveConnections?: boolean): void | Promise<void> };
@@ -94,7 +95,7 @@ export async function startHost(input: Config, directory: string, options: HostO
     if(config.streamdeckPlugin?.enabled){
       const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
       pluginGateway=startPluginGateway({port:config.streamdeckPlugin.port,token,onMessage:message=>{void presentation?.message(message).catch(report);},onConnection:connected=>{if(!connected)presentation?.disconnect();}});
-      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')})});
+      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
       const sessionMonitor=await startSessionMonitor(state=>{void presentation?.message({v:1,type:'lock',locked:!state.active}).catch(report);},{cacheDir:join(directory,'native')});
       const contextMonitor=await startAppContextMonitor(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
       presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};

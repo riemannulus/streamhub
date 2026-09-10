@@ -7,6 +7,7 @@ import {TransitionCompiler} from '../../presentation/transitions';
 import {StudioRepository,type StudioSnapshot} from '../../studio/repository';
 import {primaryButtonAction,type ActionProgram,type ButtonAction,type ButtonDefinition,type StudioDocument} from '../../studio/document';
 import {executeProgram,type ActionResult} from '../../actions/composite';
+import {MemoryButtonStateStore,buttonStateKey,type ButtonStateStore} from './button-state';
 import type {SignalStore} from './store';
 
 type Gateway={publish(message:RuntimeToPluginMessage):void;status():{connected:boolean;deviceId?:string}};
@@ -22,9 +23,11 @@ function publicFailure(error:unknown):string{
   return '실행 실패';
 }
 
-export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void}}):Promise<PresentationService>{
-  const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),compiler=new TransitionCompiler(),executions=new Set<AbortController>();
+export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void}}):Promise<PresentationService>{
+  const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),compiler=new TransitionCompiler(),executions=new Set<AbortController>(),buttonState=options.buttonState??new MemoryButtonStateStore();
   let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,generation=0,currentGeneration:string|undefined,locked=false,closed=false,revision=options.store.state().revision,polling=false;
+  const validStateKeys=()=>new Set(snapshot.document.pages.flatMap(page=>(page.buttons??[]).map(button=>buttonStateKey({documentId:snapshot.document.id,pageId:page.id,buttonId:button.id}))));
+  await buttonState.prune(validStateKeys());
   board.update(options.store.records());
   const cancelExecutions=()=>{for(const controller of executions)controller.abort();};
   const currentButton=(index:number)=>{const pageId=board.page().viewId??snapshot.document.defaultPageId,page=snapshot.document.pages.find(item=>item.id===pageId);return{pageId,button:page?.buttons?.find(item=>item.index===index)};};
@@ -34,7 +37,7 @@ export async function startPresentationService(options:{store:SignalStore;direct
   let immediateGesture:Promise<void>|undefined;
   const renderLive=async()=>{
     board.update(options.store.records());const deck=board.page(),page=snapshot.document.pages.find(item=>item.id===deck.viewId)??snapshot.document.pages.find(item=>item.id===snapshot.document.defaultPageId)!;
-    return renderer.render(snapshot.document,page,deck,repository.assets);
+    return renderer.render(snapshot.document,page,deck,repository.assets,{toggle:(pageId,buttonId)=>buttonState.getToggle({documentId:snapshot.document.id,pageId,buttonId})});
   };
   const publish=async(trigger:PresentationTrigger,spec=snapshot.document.motion.pageChange)=>{
     if(closed)return;
@@ -54,16 +57,18 @@ export async function startPresentationService(options:{store:SignalStore;direct
     if(!controller.signal.aborted&&!locked&&!closed)await publish('refresh');
   };
   const executeBehavior=async(pageId:string,button:ButtonDefinition,program:ActionProgram)=>{
+    const stateKey={documentId:snapshot.document.id,pageId,buttonId:button.id},toggle=program.type==='toggle'?(buttonState.getToggle(stateKey)??program.initial):undefined,resolved=program.type==='toggle'?{...program,initial:toggle!}:program;
     const singleNavigation=program.type==='single'&&navigation(program.action);
     if(!singleNavigation){board.setActionStatus(pageId,button.index,'running');await publish('refresh');}
-    const controller=new AbortController();executions.add(controller);let result:ActionResult;
-    try{result=await executeProgram(program,{signal:controller.signal,run:async(action,signal)=>{
-      if(navigation(action))return board.navigateAction(action)?{ok:true}:{ok:false,code:'navigation-unavailable',message:'Page navigation is unavailable'};
+    if(locked||closed)return;const controller=new AbortController();executions.add(controller);let result:ActionResult,navigated=false;
+    try{result=await executeProgram(resolved,{signal:controller.signal,run:async(action,signal)=>{
+      if(navigation(action)){const moved=board.navigateAction(action);navigated ||= moved;return moved?{ok:true}:{ok:false,code:'navigation-unavailable',message:'Page navigation is unavailable'};}
       const mapped=effect(action);if(!mapped)return{ok:false,code:'not-executable',message:'Action is not executable'};
       try{await options.execute(mapped,signal);return{ok:true};}catch(error){return{ok:false,code:typeof (error as {code?:unknown})?.code==='string'?(error as {code:string}).code:'execution-failed',message:publicFailure(error)};}
     }});}finally{executions.delete(controller);}
     if(controller.signal.aborted||closed||locked)return;
-    if(singleNavigation){await publish('page');return;}
+    if(result!.ok&&toggle)try{await buttonState.setToggle(stateKey,toggle==='off'?'on':'off');}catch{result={ok:false,code:'state-write-failed',message:'토글 상태를 저장하지 못했습니다.'};}
+    if(navigated){await publish('page');return;}
     const current=currentButton(button.index);if(current.pageId!==pageId||current.button?.id!==button.id)return;
     if(!singleNavigation)board.setActionStatus(pageId,button.index,result!.ok?'success':'error',result!.ok?undefined:result!.message);
     await publish('refresh');
@@ -95,7 +100,7 @@ export async function startPresentationService(options:{store:SignalStore;direct
     disconnect(){gestures.accept({type:'cancel-all',reason:'disconnect',at:(options.now??Date.now)()});cancelExecutions();board.cancelInput();},
     async context(value,now=Date.now()){board.context(value,now);if(!locked)await publish('page');},
     refresh:async(trigger='refresh')=>publish(trigger),
-    async apply(document,expectedVersion){gestures.accept({type:'cancel-all',reason:'apply',at:(options.now??Date.now)()});cancelExecutions();snapshot=repository.apply(document,expectedVersion);board.cancelInput();board=new PageBoard(studioDocumentToPageConfig(snapshot.document));board.update(options.store.records());await publish('page');return snapshot;},
+    async apply(document,expectedVersion){gestures.accept({type:'cancel-all',reason:'apply',at:(options.now??Date.now)()});cancelExecutions();snapshot=repository.apply(document,expectedVersion);await buttonState.prune(validStateKeys());board.cancelInput();board=new PageBoard(studioDocumentToPageConfig(snapshot.document));board.update(options.store.records());await publish('page');return snapshot;},
     snapshot:()=>structuredClone(snapshot),
     status:()=>({...options.gateway.status(),locked,...(currentGeneration?{generation:currentGeneration}:{})}),
     async stop(){closed=true;clearInterval(timer);gestures.accept({type:'cancel-all',reason:'stop',at:(options.now??Date.now)()});cancelExecutions();board.cancelInput();},
