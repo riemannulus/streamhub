@@ -413,11 +413,11 @@ Commit: `feat(studio): add fast button editing gestures`
 - Consumes all prior core-editor tasks.
 - Produces the committed M1 gate required before advanced actions or Runtime data work.
 
-- [ ] **Step 1: Write one automated blank-to-three-pages test**
+- [x] **Step 1: Write one automated blank-to-three-pages test**
 
 Boot a temporary repository, Runtime presentation service, fake plugin, and editor server. Create `홈`, `웹`, `미디어`; configure Firefox, website, hotkey, text, media, next, previous, direct target, and indicator; apply; press/release every executable button; assert exact effects and final frame hashes.
 
-- [ ] **Step 2: Run the integration and full automated gates**
+- [x] **Step 2: Run the integration and full automated gates**
 
 Run: `bun test packages/editor/core-editor.integration.test.ts && bun run check && bun run streamdeck:plugin:check && git diff --check`
 
