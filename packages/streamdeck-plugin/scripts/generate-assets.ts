@@ -1,9 +1,21 @@
-import {mkdirSync,rmSync,utimesSync,writeFileSync} from 'node:fs';import {join} from 'node:path';import sharp from 'sharp';
+import {mkdirSync,rmSync,utimesSync,writeFileSync} from 'node:fs';import {join,resolve} from 'node:path';import sharp from 'sharp';
 const root='com.streamhub.studio.sdPlugin',dir=join(root,'imgs');mkdirSync(dir,{recursive:true});mkdirSync(join(root,'bin'),{recursive:true});mkdirSync(join(root,'profiles'),{recursive:true});
 const make=async(name:string,size:number)=>sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect width="100%" height="100%" rx="${size/5}" fill="#3478f6"/><path d="M${size*.22} ${size*.5}h${size*.56}M${size*.5} ${size*.22}v${size*.56}" stroke="white" stroke-width="${size*.1}" stroke-linecap="round"/></svg>`)).png().toFile(join(dir,name));
 await Promise.all([make('action.png',20),make('action@2x.png',40),make('key.png',72),make('category.png',28),make('category@2x.png',56),make('plugin.png',256),make('plugin@2x.png',512)]);
 const actions=Object.fromEntries(Array.from({length:15},(_,index)=>{
   const column=index%5,row=Math.floor(index/5);
-  return[`${column},${row}`,{ActionID:`00000000-0000-4000-8000-${String(index+1).padStart(12,'0')}`,LinkedTitle:true,Name:'Streamhub 캔버스 셀',Plugin:{Name:'Streamhub Studio',UUID:'com.streamhub.studio',Version:'0.2.0.0'},Resources:null,Settings:{},State:0,States:[{FontFamily:'',FontSize:12,FontStyle:'',FontUnderline:false,OutlineThickness:2,ShowTitle:false,TitleAlignment:'bottom',TitleColor:'#ffffff'}],UUID:'com.streamhub.studio.canvas-cell'}] as const;
+  return[`${column},${row}`,{Name:'Streamhub 캔버스 셀',Settings:{},State:0,States:[{FFamily:'',FSize:'',FStyle:'',FUnderline:'',Image:'',Title:'',TitleAlignment:'',TitleColor:'',TitleShow:''}],UUID:'com.streamhub.studio.canvas-cell'}] as const;
 }));
-const temporary=join(root,'profiles','.streamhub-profile');rmSync(temporary,{recursive:true,force:true});mkdirSync(temporary,{recursive:true});const profileManifest=join(temporary,'manifest.json');writeFileSync(profileManifest,JSON.stringify({Controllers:[{Actions:actions,Type:'Keypad'}],Icon:'',Name:'Streamhub'},null,2));utimesSync(profileManifest,new Date('2000-01-01T00:00:00Z'),new Date('2000-01-01T00:00:00Z'));const profile=join(root,'profiles','Streamhub.streamDeckProfile');rmSync(profile,{force:true});const zipped=Bun.spawnSync(['zip','-X','-q','-j',profile,profileManifest]);rmSync(temporary,{recursive:true,force:true});if(zipped.exitCode!==0)throw new Error('Failed to build Stream Deck profile');
+const temporary=join(root,'profiles','.streamhub-profile');
+const envelope='6A1AD11A-5C4D-4E16-AF5B-57A9B23B7247.sdProfile';
+const envelopeDirectory=join(temporary,envelope);
+rmSync(temporary,{recursive:true,force:true});
+mkdirSync(envelopeDirectory,{recursive:true});
+const profileManifest=join(envelopeDirectory,'manifest.json');
+writeFileSync(profileManifest,JSON.stringify({Actions:actions,DeviceModel:'20GBA9901',InstalledByPluginUUID:'com.streamhub.studio',Name:'Streamhub',PreconfiguredName:'Streamhub',Version:'1.0'}));
+utimesSync(profileManifest,new Date('2000-01-01T00:00:00Z'),new Date('2000-01-01T00:00:00Z'));
+const profile=resolve(root,'profiles','Streamhub.streamDeckProfile');
+rmSync(profile,{force:true});
+const zipped=Bun.spawnSync(['zip','-X','-q','-D','-r',profile,envelope],{cwd:temporary});
+rmSync(temporary,{recursive:true,force:true});
+if(zipped.exitCode!==0)throw new Error('Failed to build Stream Deck profile');
