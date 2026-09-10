@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
-import {PageBoard,validatePageConfig,validatePageSources,type PageConfig} from './pages';
+import {PageBoard,studioDocumentToPageConfig,validatePageConfig,validatePageSources,type PageConfig} from './pages';
+import {defaultStudioDocument} from '../studio/document';
 import {SessionDeck,type SessionRecord} from './index';
 const record=(id:string,source='a'):SessionRecord=>({id,source,kind:'live',level:'info',label:id,revision:1,createdAt:1,updatedAt:1,freshness:'fresh',press:{type:'open',url:'https://example.com'}});
 const config:PageConfig={defaultPage:'home',transition:'fade',durationMs:150,pages:[
@@ -226,4 +227,11 @@ test('region pin jumps aggregate pagination safely and all source lists are regi
   expect(board.page().keys[0]).toMatchObject({type:'signal',record:{id:'third'}});
   expect(()=>validatePageSources(cfg,['a'])).not.toThrow();expect(()=>validatePageSources(cfg,['b'])).toThrow();
   expect(()=>validatePageSources({defaultPage:'x',pages:[{id:'x',title:'X',signals:{sources:['a','missing']}}]},['a'])).toThrow();
+});
+
+test('Studio v2 adapter reuses stable region allocation and fixed effects',()=>{
+  const doc=defaultStudioDocument();doc.pages[0].buttons=[{index:0,type:'app',bundleId:'org.mozilla.firefox'}];doc.pages[0].dynamicRegions=[{id:'claude',keys:[1,2],signals:{source:'a'},order:'recent',overflow:'paginate',empty:'background'}];
+  const board=new PageBoard(studioDocumentToPageConfig(doc));board.update([record('one'),record('two')]);
+  expect(board.page().keys[0]).toMatchObject({type:'tile'});expect(board.page().keys[1]).toMatchObject({type:'signal',record:{id:'one'}});
+  expect(click(board,0)).toMatchObject({type:'button-effect',effect:{type:'app',bundleId:'org.mozilla.firefox'}});
 });

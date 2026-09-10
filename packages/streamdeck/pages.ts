@@ -1,4 +1,5 @@
 import {CONTENT_KEYS,SessionDeck,type DeckKey,type DeckLayout,type DeckPage,type PressIntent,type SessionRecord} from './index';
+import type {StudioDocument} from '../studio/document';
 
 export const BUILTIN_ICONS=['terminal','folder','check','alert','play','link'] as const;
 export type BuiltinIcon=typeof BUILTIN_ICONS[number];
@@ -16,6 +17,11 @@ export type PageDefinition = {id:string;title:string;match?:{appBundleId?:string
 export type PageConfig = {defaultPage:string;pages:PageDefinition[];transition?:'none'|'fade';durationMs?:number};
 export type PageBoardLayout = {version:1;currentPage:string;manual:boolean;pages:Record<string,DeckLayout>;regions?:Record<string,Record<string,DeckLayout>>};
 export type PageContext = {appBundleId:string|null;available:boolean;windowTitle?:string|null;displayId?:string|null};
+
+/** Project Studio v2 onto the proven PageBoard allocator and input state machine. */
+export function studioDocumentToPageConfig(document:StudioDocument):PageConfig{
+  return validatePageConfig({defaultPage:document.defaultPageId,pages:document.pages.map(page=>({id:page.id,title:page.title,...(page.match?{match:page.match}:{}),...(page.priority!==undefined?{priority:page.priority}:{}),buttons:page.buttons?.map(button=>({index:button.index,type:button.type,...(button.label!==undefined?{label:button.label}:{}),...(button.appearance?.color?{color:button.appearance.color}:{}),...(button.type==='page'?{pageId:button.pageId}:button.type==='open'?{url:button.url}:button.type==='app'?{bundleId:button.bundleId}:button.type==='action'?{name:button.name,args:button.args}:{})})) as PageButton[]|undefined,regions:page.dynamicRegions?.map(region=>({id:region.id,keys:region.keys,signals:region.signals}))}))});
+}
 
 function object(value:unknown):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected page configuration object');

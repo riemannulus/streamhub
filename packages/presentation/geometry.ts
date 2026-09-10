@@ -1,0 +1,4 @@
+import sharp from 'sharp';
+export const streamDeckClassicGeometry=Object.freeze({width:480,height:272,columns:5,rows:3,keySize:72,x:Object.freeze([11,108,205,302,399]),y:Object.freeze([5,102,199])});
+export function keyViewport(index:number){if(!Number.isInteger(index)||index<0||index>=15)throw new RangeError('Key index must be 0–14');const column=index%5,row=Math.floor(index/5);return{left:streamDeckClassicGeometry.x[column]!,top:streamDeckClassicGeometry.y[row]!,width:72,height:72,column,row};}
+export async function extractKeyPngs(canvas:Uint8Array):Promise<Buffer[]>{const meta=await sharp(canvas).metadata();if(meta.width!==480||meta.height!==272)throw new Error('Expected a 480×272 canvas');return Promise.all(Array.from({length:15},(_,index)=>sharp(canvas).extract(keyViewport(index)).png().toBuffer()));}
