@@ -238,8 +238,9 @@ export class PageBoard{
     if(epochs!==this.regionEpoch){this.regionEpoch=epochs;this.epoch++;this.blocked=this.held.size>0;}
     for(const [i,region] of this.definition.regions.entries())for(const key of region.keys)frame.keys[key]=frames[i+1].keys[key];
     const urgency=(physical:number)=>frames.reduce((sum,frame)=>{const key=frame.keys[physical];return sum+((key.type==='previous'||key.type==='next')?key.urgentCount:0);},0);
-    frame.keys[10]={type:'previous',index:10,enabled:index>0,urgentCount:urgency(10)};
-    frame.keys[14]={type:'next',index:14,enabled:index<count-1,urgentCount:urgency(14)};
+    frame.keys[10]=count>1?{type:'previous',index:10,enabled:index>0,urgentCount:urgency(10)}:{type:'empty',index:10};
+    frame.keys[13]={type:'empty',index:13};
+    frame.keys[14]=count>1?{type:'next',index:14,enabled:index<count-1,urgentCount:urgency(14)}:{type:'empty',index:14};
     const pins=frames.map(frame=>frame.keys[13]).filter((key):key is Extract<DeckKey,{type:'pin'}>=>key.type==='pin'&&!!key.record);
     if(pins.length)frame.keys[13]={...pins[0],hiddenCount:pins.reduce((sum,key)=>sum+key.hiddenCount+1,0)-1};
     return{...frame,index,pageCount:count};

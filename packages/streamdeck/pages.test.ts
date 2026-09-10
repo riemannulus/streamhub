@@ -241,3 +241,9 @@ test('Studio background-only pages do not cover the canvas with empty pagination
   const board=new PageBoard(studioDocumentToPageConfig(doc));
   expect(board.page().keys.map(key=>key.type)).toEqual(['tile',...Array.from({length:14},()=> 'empty')]);
 });
+
+test('single-page Studio regions keep inactive global navigation transparent',()=>{
+  const doc=defaultStudioDocument();doc.pages[0].dynamicRegions=[{id:'sessions',keys:[1,2,3,4],signals:{source:'a'},order:'recent',overflow:'paginate',empty:'background'}];
+  const board=new PageBoard(studioDocumentToPageConfig(doc));board.update([record('one')]);
+  expect([board.page().keys[10].type,board.page().keys[13].type,board.page().keys[14].type]).toEqual(['empty','empty','empty']);
+});
