@@ -1,0 +1,5 @@
+import {afterEach,describe,expect,test} from 'bun:test';
+import {mkdtempSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {StudioRepository,StudioVersionConflictError} from './repository';
+const roots:string[]=[];afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true})));
+describe('StudioRepository',()=>{test('persists atomically and detects stale updates',async()=>{const root=mkdtempSync(join(tmpdir(),'streamhub-studio-'));roots.push(root);const repo=new StudioRepository(root),a=repo.snapshot();expect(a.document.version).toBe(2);const next=structuredClone(a.document);next.pages[0].title='Changed';const b=repo.apply(next,a.version);expect(b.version).not.toBe(a.version);expect(()=>repo.apply(next,a.version)).toThrow(StudioVersionConflictError);expect(new StudioRepository(root).snapshot()).toEqual(b);const asset=await repo.putAsset(await (await import('sharp')).default({create:{width:1,height:1,channels:3,background:'red'}}).png().toBuffer());expect(await repo.assets.has(asset)).toBe(true);});});

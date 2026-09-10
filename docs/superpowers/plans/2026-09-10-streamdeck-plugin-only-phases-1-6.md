@@ -79,10 +79,10 @@ expect(sent).toEqual([0,1,3]);
 - Produces: `VisualAssetStore.put(bytes)`, `.read(assetId)`, `.has(assetId)`; normalized assets are PNG and IDs are lowercase SHA-256.
 - Produces: `StudioRepository.snapshot()`, `.apply(document, expectedVersion)`, `.putAsset(bytes)`.
 
-- [ ] **Step 1: Write failing document tests for a default page, standby, three motion triggers, custom background/icon references, fixed effects, dynamic regions, and strict unknown-field rejection**
-- [ ] **Step 2: Add failing tests proving old `PageConfig`/`streamdeck.board` input is rejected and document validation does not mutate input**
-- [ ] **Step 3: Run `bun test packages/studio/document.test.ts` and confirm missing-module failure**
-- [ ] **Step 4: Implement exact validators with these public shapes**
+- [x] **Step 1: Write failing document tests for a default page, standby, three motion triggers, custom background/icon references, fixed effects, dynamic regions, and strict unknown-field rejection**
+- [x] **Step 2: Add failing tests proving old `PageConfig`/`streamdeck.board` input is rejected and document validation does not mutate input**
+- [x] **Step 3: Run `bun test packages/studio/document.test.ts` and confirm missing-module failure**
+- [x] **Step 4: Implement exact validators with these public shapes**
 
 ```ts
 type StudioDocument={
@@ -93,12 +93,12 @@ type StudioDocument={
 type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:number};
 ```
 
-- [ ] **Step 5: Write failing asset tests for rotate-normalized PNG storage, duplicate deduplication, pixel limit, input byte limit, unsupported format, and traversal-resistant IDs**
-- [ ] **Step 6: Implement `VisualAssetStore` with Sharp metadata validation, 8MB/16MP limits, mode-0700 directory, and atomic exclusive write/rename publication**
-- [ ] **Step 7: Write failing repository tests for initial default document, optimistic version conflict, atomic save, and restart recovery**
-- [ ] **Step 8: Implement `StudioRepository`; store `studio.json` and `assets/` under the configured Streamhub data directory**
-- [ ] **Step 9: Run all studio domain tests and `bun run check`**
-- [ ] **Step 10: Commit `feat(studio): add v2 document and asset store`**
+- [x] **Step 5: Write failing asset tests for rotate-normalized PNG storage, duplicate deduplication, pixel limit, input byte limit, unsupported format, and traversal-resistant IDs**
+- [x] **Step 6: Implement `VisualAssetStore` with Sharp metadata validation, 8MB/16MP limits, mode-0700 directory, and atomic exclusive write/rename publication**
+- [x] **Step 7: Write failing repository tests for initial default document, optimistic version conflict, atomic save, and restart recovery**
+- [x] **Step 8: Implement `StudioRepository`; store `studio.json` and `assets/` under the configured Streamhub data directory**
+- [x] **Step 9: Run all studio domain tests and `bun run check`**
+- [x] **Step 10: Commit `feat(studio): add v2 document and asset store`**
 
 ### Task 3: Full-LCD Renderer and Transition Compiler
 
