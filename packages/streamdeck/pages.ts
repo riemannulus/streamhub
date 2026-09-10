@@ -1,5 +1,5 @@
 import {CONTENT_KEYS,SessionDeck,type DeckKey,type DeckLayout,type DeckPage,type PressIntent,type SessionRecord} from './index';
-import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,type KeyCode,type MediaCommand,type StudioDocument} from '../studio/document';
+import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,type ButtonAction,type KeyCode,type MediaCommand,type StudioDocument} from '../studio/document';
 
 export const BUILTIN_ICONS=['terminal','folder','check','alert','play','link'] as const;
 export type BuiltinIcon=typeof BUILTIN_ICONS[number];
@@ -306,6 +306,11 @@ export class PageBoard{
     }
     return{...frame,epoch:this.epoch,viewId:this.current,transition:{type:this.config.transition??'fade',durationMs:this.config.durationMs??250}};
   }
+  navigateAction(action:Extract<ButtonAction,{type:'go-to-page'|'previous-page'|'next-page'|'resume-auto-page'}>):boolean{
+    if(action.type==='go-to-page'){if(!this.config.pages.some(page=>page.id===action.pageId))return false;this.manual=true;this.select(action.pageId);return true;}
+    if(action.type==='previous-page'||action.type==='next-page'){const current=this.config.pages.findIndex(page=>page.id===this.current),target=current+(action.type==='previous-page'?-1:1);if(target<0||target>=this.config.pages.length)return false;this.manual=true;this.select(this.config.pages[target]!.id);return true;}
+    this.manual=false;this.route();return true;
+  }
   down(index:number):void{
     if(!Number.isInteger(index)||index<0||index>=15||this.held.has(index))return;
     const frame=this.page();
@@ -341,7 +346,7 @@ export class PageBoard{
   }
   setActionStatus(pageId:string,index:number,status:'running'|'success'|'error',message?:string):void{
     const button=this.config.pages.find(page=>page.id===pageId)?.buttons?.find(button=>button.index===index);
-    if(!button||!['open','app','path','hotkey','input-text','media','action'].includes(button.type))throw new Error('Unknown action button');
+    if(!button)throw new Error('Unknown action button');
     if(!['running','success','error'].includes(status))throw new Error('Invalid action status');
     this.actionStatus.set(JSON.stringify([pageId,index]),{status,...(message?{message:message.slice(0,80)}:{})});
   }

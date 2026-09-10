@@ -152,23 +152,23 @@ export function createGestureRecognizer(options: {
 }): {accept(input:GestureInput):void};
 ```
 
-- [ ] **Step 1: Write a deterministic timing matrix**
+- [x] **Step 1: Write a deterministic timing matrix**
 
 Cover press-only immediate release, deferred press when double is configured, two presses inside/outside the window, hold threshold, release after hold, duplicate down/up, out-of-order timestamps, simultaneous different keys, revision replacement, and `cancel-all`.
 
-- [ ] **Step 2: Run the focused test**
+- [x] **Step 2: Run the focused test**
 
 Run: `bun test packages/streamdeck/gestures.test.ts`
 
-- [ ] **Step 3: Implement one finite-state machine per key**
+- [x] **Step 3: Implement one finite-state machine per key**
 
 If no double branch exists, emit press on key-up. If a double branch exists, defer press until the double window expires. Emit hold once at `holdMs`; the following key-up emits nothing. Discard events whose revision differs from the captured down revision.
 
-- [ ] **Step 4: Connect lifecycle cancellation**
+- [x] **Step 4: Connect lifecycle cancellation**
 
 Call `cancel-all` before applying a page/generation change and on lock, plugin disconnect, reconnect, and Runtime shutdown. The presentation service resolves the emitted gesture against the current document before executing it.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `bun test packages/streamdeck/gestures.test.ts packages/host/src/presentation.test.ts`
 

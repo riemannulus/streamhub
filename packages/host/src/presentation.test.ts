@@ -7,6 +7,28 @@ test('presentation records stable system failures and lock cancels pending execu
   try{
     const snapshot=service.snapshot(),document=structuredClone(snapshot.document);document.pages[0].buttons=[{id:'hotkey',index:0,behavior:singlePressBehavior({type:'hotkey',keys:['command','k']}),appearance:{contentMode:'hidden'}}];await service.apply(document,snapshot.version);
     let generation=service.status().generation!;await service.message({v:1,type:'key',phase:'down',index:0,generation});await expect(service.message({v:1,type:'key',phase:'up',index:0,generation})).resolves.toBeUndefined();expect(sent.at(-1)).toMatchObject({trigger:'refresh'});
-    mode='wait';const next=service.snapshot(),changed=structuredClone(next.document);changed.pages[0].buttons![0].id='hotkey-2';await service.apply(changed,next.version);generation=service.status().generation!;await service.message({v:1,type:'key',phase:'down',index:0,generation});const pending=service.message({v:1,type:'key',phase:'up',index:0,generation});await Bun.sleep(0);await service.message({v:1,type:'lock',locked:true});expect(received?.aborted).toBe(true);release();await expect(pending).resolves.toBeUndefined();
+    mode='wait';const next=service.snapshot(),changed=structuredClone(next.document);changed.pages[0].buttons![0].id='hotkey-2';await service.apply(changed,next.version);generation=service.status().generation!;await service.message({v:1,type:'key',phase:'down',index:0,generation});received=undefined;const pending=service.message({v:1,type:'key',phase:'up',index:0,generation});for(let attempt=0;attempt<100&&!received;attempt++)await Bun.sleep(5);expect(received).toBeDefined();await service.message({v:1,type:'lock',locked:true});expect((received as AbortSignal|undefined)?.aborted).toBe(true);release();await expect(pending).resolves.toBeUndefined();
   }finally{await service.stop();store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+class GestureClock{
+  now=0;private tasks:{at:number;callback:()=>void;cancelled:boolean}[]=[];
+  schedule=(delay:number,callback:()=>void)=>{const task={at:this.now+delay,callback,cancelled:false};this.tasks.push(task);return{cancel:()=>{task.cancelled=true;}};};
+  advance(milliseconds:number){const target=this.now+milliseconds;for(;;){const task=this.tasks.filter(item=>!item.cancelled&&item.at<=target).sort((a,b)=>a.at-b.at)[0];if(!task)break;task.cancelled=true;this.now=task.at;task.callback();}this.now=target;}
+}
+const waitFor=async(predicate:()=>boolean)=>{for(let attempt=0;attempt<100&&!predicate();attempt++)await Bun.sleep(5);expect(predicate()).toBe(true);};
+
+test('presentation selects exactly one press, double-press or hold branch and cancels pending gestures',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'streamhub-gestures-')),store=new SignalStore(':memory:'),sent:any[]=[],effects:any[]=[],clock=new GestureClock();let service:Awaited<ReturnType<typeof startPresentationService>>|undefined;
+  try{
+    service=await startPresentationService({store,directory:dir,gateway:{publish:message=>sent.push(message),status:()=>({connected:true})},execute:async effect=>{effects.push(effect);},now:()=>clock.now,schedule:clock.schedule});
+    const snapshot=service.snapshot(),document=structuredClone(snapshot.document);document.motion.pageChange={type:'none',durationMs:0};document.pages[0].buttons=[{id:'gesture',index:0,behavior:{press:{type:'single',action:{type:'open-url',url:'https://press.example/'}},doublePress:{type:'single',action:{type:'open-url',url:'https://double.example/'}},hold:{type:'single',action:{type:'open-url',url:'https://hold.example/'}},doublePressMs:300,holdMs:500},appearance:{contentMode:'hidden'}}];await service.apply(document,snapshot.version);
+    const input=async(phase:'down'|'up')=>service!.message({v:1,type:'key',phase,index:0,generation:service!.status().generation!});
+    await input('down');await input('up');clock.advance(301);await waitFor(()=>effects.length===1);expect(effects.at(-1)).toMatchObject({url:'https://press.example/'});
+    await input('down');await input('up');clock.advance(100);await input('down');await input('up');await waitFor(()=>effects.length===2);expect(effects.at(-1)).toMatchObject({url:'https://double.example/'});
+    await input('down');clock.advance(500);await waitFor(()=>effects.length===3);await input('up');clock.advance(400);expect(effects.at(-1)).toMatchObject({url:'https://hold.example/'});expect(effects).toHaveLength(3);
+    await input('down');await input('up');await service.refresh();clock.advance(400);expect(effects).toHaveLength(3);
+    await input('down');await input('up');service.disconnect();clock.advance(400);expect(effects).toHaveLength(3);
+    await input('down');await input('up');await service.message({v:1,type:'lock',locked:true});clock.advance(400);expect(effects).toHaveLength(3);
+  }finally{await service?.stop();store.close();rmSync(dir,{recursive:true,force:true});}
 });
