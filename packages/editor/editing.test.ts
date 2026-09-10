@@ -1,70 +1,79 @@
 import {expect,test} from 'bun:test';
-import {BoardHistory,createTemplate,duplicatePage,movePage} from './editing';
-import * as editing from './editing';
-import {validatePageConfig,type PageConfig} from '../streamdeck/pages';
-const initial=():PageConfig=>({defaultPage:'home',pages:[{id:'home',title:'Home',buttons:[{index:0,type:'page',pageId:'home'}]},{id:'work',title:'Work',signals:{}}]});
+import {addPage,deletePage,duplicatePage,movePage,pageReferences,renamePage,setDefaultPage} from './editing';
+import {defaultStudioDocument,type StudioDocument} from '../studio/document';
 
-test('history clones drafts, supports invalid intermediate edits and branches undo/redo',()=>{
-  const board=initial(),history=new BoardHistory(board);
-  board.pages[0].title='';history.push(board);
-  board.pages[0].title='Later';
-  expect(history.undo()?.pages[0].title).toBe('Home');
-  const invalid=history.redo()!;expect(invalid.pages[0].title).toBe('');
-  invalid.pages[0].title='Outside';
-  expect(history.undo()?.pages[0].title).toBe('Home');
-  expect(history.redo()?.pages[0].title).toBe('');
-  history.undo();history.push({...initial(),transition:'none'});
-  expect(history.canRedo).toBe(false);expect(history.canUndo).toBe(true);
-  expect(history.redo()).toBeUndefined();
-  const undone=history.undo()!;undone.pages[0].title='Mutated';
-  expect(history.undo()).toBeUndefined();
-  expect(history.redo()?.pages[0].title).toBe('Home');
+const initial=():StudioDocument=>{
+  const document=defaultStudioDocument({id:'11111111-1111-4111-8111-111111111111'});
+  document.pages=[
+    {id:'home',title:'Home',buttons:[
+      {id:'to-home',index:0,action:{type:'go-to-page',pageId:'home'},appearance:{contentMode:'hidden'}},
+      {id:'to-web',index:1,action:{type:'go-to-page',pageId:'web'},appearance:{contentMode:'hidden'}},
+    ]},
+    {id:'web',title:'Web'},
+    {id:'media',title:'Media'},
+  ];
+  return document;
+};
+
+test('page commands rename, move and choose a default without mutating input',()=>{
+  const document=initial();
+  expect(renamePage(document,'home','홈').pages[0].title).toBe('홈');
+  expect(movePage(document,'media',-1).pages.map(page=>page.id)).toEqual(['home','media','web']);
+  expect(setDefaultPage(document,'media').defaultPageId).toBe('media');
+  expect(document.pages.map(page=>page.title)).toEqual(['Home','Web','Media']);
+  expect(document.defaultPageId).toBe('home');
+  expect(()=>renamePage(document,'missing','x')).toThrow('Unknown page');
+  expect(()=>movePage(document,'home',0 as -1)).toThrow('Invalid page movement');
+  expect(()=>setDefaultPage(document,'missing')).toThrow('Unknown page');
 });
-test('history deduplicates unchanged edits, resets and caps retained states at 100',()=>{
-  const history=new BoardHistory(initial());history.push(initial());expect(history.canUndo).toBe(false);
-  for(let index=0;index<120;index++){const board=initial();board.pages[0].title=String(index);history.push(board);}
-  let count=0;while(history.undo())count++;
-  expect(count).toBe(99);
-  const board=initial();history.reset(board);board.pages[0].title='Outside';
-  expect(history.canUndo).toBe(false);expect(history.canRedo).toBe(false);
-  const modified=initial();modified.pages[0].title='New';history.push(modified);
-  expect(history.undo()?.pages[0].title).toBe('Home');
+
+test('addPage generates a valid unique ID and enforces the page ceiling',()=>{
+  const document=initial();document.pages.push({id:'page-4',title:'Existing'});
+  const added=addPage(document);
+  expect(added.pages.at(-1)).toMatchObject({id:'page-5',title:'페이지 5'});
+  expect(document.pages).toHaveLength(4);
+  let full=initial();
+  while(full.pages.length<32)full=addPage(full);
+  expect(()=>addPage(full)).toThrow('at most 32 pages');
 });
-test('duplicate remaps self references while preserving default and unrelated references',()=>{
-  const board=initial();board.pages[0].buttons!.push({index:1,type:'page',pageId:'work'});
-  const first=duplicatePage(board,'home');const copy=first.board.pages.at(-1)!;
-  expect(first.selected).toBe('home-copy');expect(copy.title).toBe('Home (복사)');
-  expect(copy.buttons).toEqual([{index:0,type:'page',pageId:'home-copy'},{index:1,type:'page',pageId:'work'}]);
-  expect(first.board.defaultPage).toBe('home');expect(board.pages).toHaveLength(2);
-  const second=duplicatePage(first.board,'home');expect(second.selected).toBe('home-copy-2');
-  expect(second.board.pages.at(-1)!.title).toBe('Home (복사 2)');
-  copy.buttons!.length=0;expect(board.pages[0].buttons).toHaveLength(2);
-  expect(()=>duplicatePage(board,'missing')).toThrow();
+
+test('duplicatePage gives pages and buttons unique IDs and remaps self references',()=>{
+  const document=initial(),duplicated=duplicatePage(document,'home'),copy=duplicated.pages.at(-1)!;
+  expect(copy).toMatchObject({id:'home-copy',title:'Home (복사)'});
+  expect(copy.buttons?.map(button=>button.id)).toEqual(['to-home-copy','to-web-copy']);
+  expect(copy.buttons?.map(button=>button.action)).toEqual([
+    {type:'go-to-page',pageId:'home-copy'},
+    {type:'go-to-page',pageId:'web'},
+  ]);
+  expect(document.pages).toHaveLength(3);
+  const twice=duplicatePage(duplicated,'home');
+  expect(twice.pages.at(-1)).toMatchObject({id:'home-copy-2',title:'Home (복사 2)'});
+  expect(()=>duplicatePage(document,'missing')).toThrow('Unknown page');
 });
-test('reordering preserves references and boundary movement is an isolated no-op',()=>{
-  const board=initial(),moved=movePage(board,'work',-1);
-  expect(moved.pages.map(page=>page.id)).toEqual(['work','home']);expect(moved.defaultPage).toBe('home');
-  expect(board.pages[0].id).toBe('home');
-  const unchanged=movePage(board,'home',-1);unchanged.pages[0].title='Changed';expect(board.pages[0].title).toBe('Home');
-  expect(()=>movePage(board,'missing',1)).toThrow();
+
+test('pageReferences reports incoming buttons and deletion never rewrites them silently',()=>{
+  const document=initial();
+  expect(pageReferences(document,'web')).toEqual([{pageId:'home',buttonId:'to-web'}]);
+  expect(()=>deletePage(document,'web')).toThrow('page is still referenced');
+  expect(document.pages).toHaveLength(3);
 });
-test('templates validate source filters and preserve pagination controls and page limits',()=>{
-  for(const kind of ['all','source','tools'] as const){
-    const result=createTemplate(initial(),kind,'demo');expect(validatePageConfig(result.board)).toEqual(result.board);
-    const page=result.board.pages.at(-1)!;
-    expect(page.buttons?.some(button=>button.index===10||button.index===14)).toBe(false);
-    expect(page.signals).toEqual(kind==='tools'?undefined:kind==='source'?{source:'demo'}:{});
-  }
-  expect(()=>createTemplate(initial(),'source')).toThrow();
-  expect(()=>createTemplate(initial(),'source','bad source')).toThrow();
-  let board=initial();while(board.pages.length<32)board=createTemplate(board,'all').board;
-  expect(()=>createTemplate(board,'tools')).toThrow();expect(()=>duplicatePage(board,'home')).toThrow();
+
+test('deletePage protects the only page and requires an explicit default replacement',()=>{
+  const single=defaultStudioDocument({id:'22222222-2222-4222-8222-222222222222'});
+  expect(()=>deletePage(single,'home')).toThrow('only page');
+
+  const document=initial();document.pages[0].buttons=[];
+  expect(()=>deletePage(document,'home')).toThrow('replacement');
+  expect(()=>deletePage(document,'home','missing')).toThrow('Unknown replacement');
+  const deleted=deletePage(document,'home','web');
+  expect(deleted.pages.map(page=>page.id)).toEqual(['web','media']);
+  expect(deleted.defaultPageId).toBe('web');
+  expect(()=>deletePage(document,'media','web')).toThrow('only accepted for the default');
+  expect(()=>deletePage(document,'missing')).toThrow('Unknown page');
 });
-test('capacity separates general and regional signal keys without double counting',()=>{
-  const capacity=(editing as typeof editing&{pageSignalCapacity?:(page:PageConfig['pages'][number])=>unknown}).pageSignalCapacity;
-  const page:PageConfig['pages'][number]={id:'work',title:'Work',signals:{},buttons:[{index:0,type:'text',label:'Fixed'}],regions:[
-    {id:'build',keys:[1,2],signals:{source:'build'}},{id:'alerts',keys:[3],signals:{levels:['urgent']}},
-  ]};
-  expect(capacity?.(page)).toEqual({general:8,regional:3,total:11});
-  expect(capacity?.({...page,signals:undefined})).toEqual({general:0,regional:3,total:3});
+
+test('boundary page movement returns an isolated validated clone',()=>{
+  const document=initial(),unchanged=movePage(document,'home',-1);
+  expect(unchanged).toEqual(document);expect(unchanged).not.toBe(document);
+  unchanged.pages[0].title='Changed';expect(document.pages[0].title).toBe('Home');
 });

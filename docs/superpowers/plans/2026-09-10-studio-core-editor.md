@@ -205,7 +205,7 @@ Commit: `feat(studio): add first-class page navigation actions`
 - Produces pure commands: `addPage`, `renamePage`, `duplicatePage`, `movePage`, `setDefaultPage`, `deletePage`, `pageReferences`.
 - `StudioModel` wraps each command in one undo entry and updates selection deterministically.
 
-- [ ] **Step 1: Write failing command tests**
+- [x] **Step 1: Write failing command tests**
 
 ```ts
 expect(renamePage(document,'home','홈').pages[0].title).toBe('홈');
@@ -216,15 +216,15 @@ expect(()=>deletePage(document,'web')).toThrow('page is still referenced');
 
 Cover one-page deletion, ID generation, duplicate self-reference remap, default reassignment, 32-page ceiling, and immutability.
 
-- [ ] **Step 2: Run the editing tests and confirm v2 helpers cannot accept v3 documents**
+- [x] **Step 2: Run the editing tests and confirm v2 helpers cannot accept v3 documents**
 
 Run: `bun test packages/editor/editing.test.ts packages/editor/web/model.test.ts`
 
-- [ ] **Step 3: Implement pure v3 commands and model wrappers**
+- [x] **Step 3: Implement pure v3 commands and model wrappers**
 
 `deletePage` takes an optional replacement ID only when deleting the default page. It never rewrites incoming page buttons silently; references must be resolved explicitly.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `bun test packages/editor/editing.test.ts packages/editor/web/model.test.ts`
 
