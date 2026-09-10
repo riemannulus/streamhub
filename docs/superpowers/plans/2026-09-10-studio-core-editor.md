@@ -119,29 +119,29 @@ export type ComposeButtonInput = {
 };
 ```
 
-- [ ] **Step 1: Write four golden pixel tests**
+- [x] **Step 1: Write four golden pixel tests**
 
 Create deterministic 72×72 backgrounds and icons. Assert per-mode SHA-256 hashes are distinct, `hidden` equals the untouched background, icon-and-label contains icon and label sample pixels, and label-only contains no icon pixels.
 
-- [ ] **Step 2: Run the compositor test and confirm the module is missing**
+- [x] **Step 2: Run the compositor test and confirm the module is missing**
 
 Run: `bun test packages/presentation/button-compositor.test.ts`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement the fixed layer order**
+- [x] **Step 3: Implement the fixed layer order**
 
 Composite `background → button background → icon → label → runtime badge`. Escape label text before creating bounded local SVG; allow only declared font size/position/color. Never load external SVG, fonts, or URLs.
 
-- [ ] **Step 4: Replace the existing icon-replaces-key branch**
+- [x] **Step 4: Replace the existing icon-replaces-key branch**
 
 `DeckVisualRenderer` must crop the page background cell first, then call `composeButton` for every occupied fixed or dynamic key. Remove the branch that returns an uploaded icon as the entire key.
 
-- [ ] **Step 5: Add a Studio preview endpoint using the same compositor**
+- [x] **Step 5: Add a Studio preview endpoint using the same compositor**
 
 Add `POST /api/preview/button` with the editor capability header. Input is one validated v3 appearance and an asset-backed background cell; output is `image/png`. Enforce the existing 9 MiB request ceiling and same-origin policy.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `bun test packages/presentation/button-compositor.test.ts packages/presentation/render.test.ts packages/editor/server.test.ts`
 

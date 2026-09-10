@@ -52,7 +52,7 @@ function studioAppearance(raw:unknown,context:StudioValidationContext):StudioApp
   return result;
 }
 
-function buttonAppearance(raw:unknown,context:StudioValidationContext):ButtonAppearance{
+export function validateButtonAppearance(raw:unknown,context:StudioValidationContext={}):ButtonAppearance{
   const value=object(raw);exact(value,['contentMode','icon','label','background']);
   if(!['icon-and-label','icon-only','label-only','hidden'].includes(value.contentMode as string))throw new Error('Invalid content mode');
   const result:ButtonAppearance={contentMode:value.contentMode as ButtonContentMode};
@@ -100,7 +100,7 @@ export function validateStudioDocument(raw:unknown,context:StudioValidationConte
     if(input.priority!==undefined){if(!Number.isInteger(input.priority)||(input.priority as number)<-1000||(input.priority as number)>1000)throw new Error('Invalid priority');page.priority=input.priority as number;}
     if(input.match!==undefined){const match=object(input.match);exact(match,['appBundleId','windowTitle','displayId']);if(!Object.keys(match).length)throw new Error('Expected a page condition');const normalized:NonNullable<StudioPage['match']>={};if(match.appBundleId!==undefined)normalized.appBundleId=bundleId(match.appBundleId);if(match.windowTitle!==undefined){const title=object(match.windowTitle);exact(title,['mode','value']);if(title.mode!=='equals'&&title.mode!=='contains')throw new Error('Invalid title condition');normalized.windowTitle={mode:title.mode,value:text(title.value,512)};}if(match.displayId!==undefined)normalized.displayId=text(match.displayId,128);page.match=normalized;}
     if(input.appearance!==undefined)page.appearance=studioAppearance(input.appearance,context);
-    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','action','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);return{id:buttonId,index:button.index as number,action:validateButtonAction(button.action,context),appearance:buttonAppearance(button.appearance,context)};});}
+    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','action','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);return{id:buttonId,index:button.index as number,action:validateButtonAction(button.action,context),appearance:validateButtonAppearance(button.appearance,context)};});}
     return page;
   });
   const defaultPageId=identifier(value.defaultPageId,'default page');if(!pageIds.has(defaultPageId))throw new Error('Unknown default page');

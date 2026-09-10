@@ -114,11 +114,21 @@ test('saving preserves enabled devices and refuses external configuration edits'
   await first;
 });
 
-test('v2 Studio uploads assets, autosaves a draft and applies offline without exposing host credentials',async()=>{
+test('v3 Studio uploads assets, autosaves a draft and applies offline without exposing host credentials',async()=>{
   const {url,bootstrap}=await setup();const png=await sharp({create:{width:2,height:2,channels:3,background:'red'}}).png().toBuffer();
   const uploaded=await fetch(`${url}/api/assets`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'image/png'},body:new Blob([new Uint8Array(png)])});expect(uploaded.status).toBe(200);const {assetId}=await uploaded.json() as any;
   const document=structuredClone(bootstrap.snapshot.document);document.pages[0].appearance={background:{assetId,fit:'cover'}};
   expect((await fetch(`${url}/api/draft`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({document})})).status).toBe(200);
   const applied=await fetch(`${url}/api/apply`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({document,expectedVersion:bootstrap.snapshot.version})});expect(applied.status).toBe(200);expect((await applied.json() as any).runtimeStatus.connected).toBe(false);
   expect((await fetch(`${url}/api/assets/${assetId}`)).headers.get('Content-Type')).toBe('image/png');expect(JSON.stringify(bootstrap)).not.toContain(baseConfig().adminToken);
+});
+
+test('button preview requires capability and returns shared 72px PNG composition',async()=>{
+  const {url,bootstrap}=await setup(),png=await sharp({create:{width:8,height:8,channels:4,background:'blue'}}).png().toBuffer();
+  const uploaded=await fetch(`${url}/api/assets`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'image/png'},body:new Blob([new Uint8Array(png)])}),{assetId}=await uploaded.json() as any;
+  const payload={index:0,pageAppearance:{color:'#112233'},appearance:{contentMode:'icon-only',icon:{assetId,fit:'contain'}}};
+  expect((await fetch(`${url}/api/preview/button`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).status).toBe(403);
+  const response=await fetch(`${url}/api/preview/button`,{method:'POST',headers:{'Content-Type':'application/json','X-Streamhub-Editor':bootstrap.token},body:JSON.stringify(payload)});
+  expect(response.status).toBe(200);expect(response.headers.get('Content-Type')).toBe('image/png');
+  expect(await sharp(await response.arrayBuffer()).metadata()).toMatchObject({width:72,height:72});
 });

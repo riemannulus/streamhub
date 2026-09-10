@@ -8,8 +8,10 @@ import { SimulatorSession } from './simulator';
 import { checkDraft } from '../simulator/draft-check';
 import { validateSimulatorBoard } from './simulator';
 import {StudioRepository,StudioVersionConflictError} from '../studio/repository';
-import {validateStudioDocument} from '../studio/document';
-import {streamDeckClassicGeometry} from '../presentation/geometry';
+import {defaultStudioDocument,validateStudioDocument} from '../studio/document';
+import {extractKeyPngs,streamDeckClassicGeometry} from '../presentation/geometry';
+import {renderStudioBackground} from '../presentation/render';
+import {composeButton} from '../presentation/button-compositor';
 
 const LIMIT = 9 * 1024 * 1024;
 const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
@@ -75,6 +77,18 @@ export function startEditorServer(options: {port?: number; assetsDir?: string} =
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
         if(url.pathname==='/api/assets'&&request.method==='POST'){
           try{const bytes=new Uint8Array(await request.arrayBuffer());return json({assetId:await repository.putAsset(bytes)});}catch(error){return json({error:error instanceof Error?error.message:'이미지를 저장하지 못했습니다.'},400);}
+        }
+        if(url.pathname==='/api/preview/button'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          try{
+            const payload=await request.json() as Record<string,unknown>;
+            if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).some(key=>!['index','pageAppearance','appearance'].includes(key)))throw new Error('Invalid preview request');
+            if(!Number.isInteger(payload.index)||(payload.index as number)<0||(payload.index as number)>14)throw new Error('Invalid key index');
+            const document=defaultStudioDocument({id:'00000000-0000-4000-8000-000000000001'});document.pages[0].appearance=payload.pageAppearance as never;document.pages[0].buttons=[{id:'preview',index:payload.index as number,action:{type:'none'},appearance:payload.appearance as never}];
+            const validated=validateStudioDocument(document),background=await renderStudioBackground(validated.pages[0].appearance,repository.assets),crop=(await extractKeyPngs(background))[payload.index as number]!;
+            const image=await composeButton({appearance:validated.pages[0].buttons![0].appearance,background:crop,assets:repository.assets});
+            return new Response(new Uint8Array(image),{headers:{...headers,'Content-Type':'image/png'}});
+          }catch(error){return json({error:error instanceof Error?error.message:'미리보기를 만들지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/draft'&&request.method==='POST'){
           if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,document=validateStudioDocument(payload.document,{sources:Object.keys(readConfig().sources)});writeFileSync(draftPath,JSON.stringify(document,null,2)+'\n',{mode:0o600});return json({document});}catch(error){return json({error:error instanceof Error?error.message:'초안을 저장하지 못했습니다.'},400);}
