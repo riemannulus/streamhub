@@ -1799,7 +1799,7 @@ var require_websocket = __commonJS(function(exports, module) {
   var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
   var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
 
-  class WebSocket2 extends EventEmitter2 {
+  class WebSocket extends EventEmitter2 {
     constructor(address, protocols, options) {
       super();
       this._binaryType = BINARY_TYPES[0];
@@ -1812,7 +1812,7 @@ var require_websocket = __commonJS(function(exports, module) {
       this._extensions = {};
       this._paused = false;
       this._protocol = "";
-      this._readyState = WebSocket2.CONNECTING;
+      this._readyState = WebSocket.CONNECTING;
       this._receiver = null;
       this._sender = null;
       this._socket = null;
@@ -1914,12 +1914,12 @@ var require_websocket = __commonJS(function(exports, module) {
       socket.on("data", socketOnData);
       socket.on("end", socketOnEnd);
       socket.on("error", socketOnError);
-      this._readyState = WebSocket2.OPEN;
+      this._readyState = WebSocket.OPEN;
       this.emit("open");
     }
     emitClose() {
       if (!this._socket) {
-        this._readyState = WebSocket2.CLOSED;
+        this._readyState = WebSocket.CLOSED;
         this.emit("close", this._closeCode, this._closeMessage);
         return;
       }
@@ -1927,24 +1927,24 @@ var require_websocket = __commonJS(function(exports, module) {
         this._extensions[PerMessageDeflate.extensionName].cleanup();
       }
       this._receiver.removeAllListeners();
-      this._readyState = WebSocket2.CLOSED;
+      this._readyState = WebSocket.CLOSED;
       this.emit("close", this._closeCode, this._closeMessage);
     }
     close(code, data) {
-      if (this.readyState === WebSocket2.CLOSED)
+      if (this.readyState === WebSocket.CLOSED)
         return;
-      if (this.readyState === WebSocket2.CONNECTING) {
+      if (this.readyState === WebSocket.CONNECTING) {
         const msg = "WebSocket was closed before the connection was established";
         abortHandshake(this, this._req, msg);
         return;
       }
-      if (this.readyState === WebSocket2.CLOSING) {
+      if (this.readyState === WebSocket.CLOSING) {
         if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) {
           this._socket.end();
         }
         return;
       }
-      this._readyState = WebSocket2.CLOSING;
+      this._readyState = WebSocket.CLOSING;
       this._sender.close(code, data, !this._isServer, (err) => {
         if (err)
           return;
@@ -1956,14 +1956,14 @@ var require_websocket = __commonJS(function(exports, module) {
       setCloseTimer(this);
     }
     pause() {
-      if (this.readyState === WebSocket2.CONNECTING || this.readyState === WebSocket2.CLOSED) {
+      if (this.readyState === WebSocket.CONNECTING || this.readyState === WebSocket.CLOSED) {
         return;
       }
       this._paused = true;
       this._socket.pause();
     }
     ping(data, mask, cb) {
-      if (this.readyState === WebSocket2.CONNECTING) {
+      if (this.readyState === WebSocket.CONNECTING) {
         throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
       }
       if (typeof data === "function") {
@@ -1975,7 +1975,7 @@ var require_websocket = __commonJS(function(exports, module) {
       }
       if (typeof data === "number")
         data = data.toString();
-      if (this.readyState !== WebSocket2.OPEN) {
+      if (this.readyState !== WebSocket.OPEN) {
         sendAfterClose(this, data, cb);
         return;
       }
@@ -1984,7 +1984,7 @@ var require_websocket = __commonJS(function(exports, module) {
       this._sender.ping(data || EMPTY_BUFFER, mask, cb);
     }
     pong(data, mask, cb) {
-      if (this.readyState === WebSocket2.CONNECTING) {
+      if (this.readyState === WebSocket.CONNECTING) {
         throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
       }
       if (typeof data === "function") {
@@ -1996,7 +1996,7 @@ var require_websocket = __commonJS(function(exports, module) {
       }
       if (typeof data === "number")
         data = data.toString();
-      if (this.readyState !== WebSocket2.OPEN) {
+      if (this.readyState !== WebSocket.OPEN) {
         sendAfterClose(this, data, cb);
         return;
       }
@@ -2005,7 +2005,7 @@ var require_websocket = __commonJS(function(exports, module) {
       this._sender.pong(data || EMPTY_BUFFER, mask, cb);
     }
     resume() {
-      if (this.readyState === WebSocket2.CONNECTING || this.readyState === WebSocket2.CLOSED) {
+      if (this.readyState === WebSocket.CONNECTING || this.readyState === WebSocket.CLOSED) {
         return;
       }
       this._paused = false;
@@ -2013,7 +2013,7 @@ var require_websocket = __commonJS(function(exports, module) {
         this._socket.resume();
     }
     send(data, options, cb) {
-      if (this.readyState === WebSocket2.CONNECTING) {
+      if (this.readyState === WebSocket.CONNECTING) {
         throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
       }
       if (typeof options === "function") {
@@ -2022,7 +2022,7 @@ var require_websocket = __commonJS(function(exports, module) {
       }
       if (typeof data === "number")
         data = data.toString();
-      if (this.readyState !== WebSocket2.OPEN) {
+      if (this.readyState !== WebSocket.OPEN) {
         sendAfterClose(this, data, cb);
         return;
       }
@@ -2039,48 +2039,48 @@ var require_websocket = __commonJS(function(exports, module) {
       this._sender.send(data || EMPTY_BUFFER, opts, cb);
     }
     terminate() {
-      if (this.readyState === WebSocket2.CLOSED)
+      if (this.readyState === WebSocket.CLOSED)
         return;
-      if (this.readyState === WebSocket2.CONNECTING) {
+      if (this.readyState === WebSocket.CONNECTING) {
         const msg = "WebSocket was closed before the connection was established";
         abortHandshake(this, this._req, msg);
         return;
       }
       if (this._socket) {
-        this._readyState = WebSocket2.CLOSING;
+        this._readyState = WebSocket.CLOSING;
         this._socket.destroy();
       }
     }
   }
-  Object.defineProperty(WebSocket2, "CONNECTING", {
+  Object.defineProperty(WebSocket, "CONNECTING", {
     enumerable: true,
     value: readyStates.indexOf("CONNECTING")
   });
-  Object.defineProperty(WebSocket2.prototype, "CONNECTING", {
+  Object.defineProperty(WebSocket.prototype, "CONNECTING", {
     enumerable: true,
     value: readyStates.indexOf("CONNECTING")
   });
-  Object.defineProperty(WebSocket2, "OPEN", {
+  Object.defineProperty(WebSocket, "OPEN", {
     enumerable: true,
     value: readyStates.indexOf("OPEN")
   });
-  Object.defineProperty(WebSocket2.prototype, "OPEN", {
+  Object.defineProperty(WebSocket.prototype, "OPEN", {
     enumerable: true,
     value: readyStates.indexOf("OPEN")
   });
-  Object.defineProperty(WebSocket2, "CLOSING", {
+  Object.defineProperty(WebSocket, "CLOSING", {
     enumerable: true,
     value: readyStates.indexOf("CLOSING")
   });
-  Object.defineProperty(WebSocket2.prototype, "CLOSING", {
+  Object.defineProperty(WebSocket.prototype, "CLOSING", {
     enumerable: true,
     value: readyStates.indexOf("CLOSING")
   });
-  Object.defineProperty(WebSocket2, "CLOSED", {
+  Object.defineProperty(WebSocket, "CLOSED", {
     enumerable: true,
     value: readyStates.indexOf("CLOSED")
   });
-  Object.defineProperty(WebSocket2.prototype, "CLOSED", {
+  Object.defineProperty(WebSocket.prototype, "CLOSED", {
     enumerable: true,
     value: readyStates.indexOf("CLOSED")
   });
@@ -2093,10 +2093,10 @@ var require_websocket = __commonJS(function(exports, module) {
     "readyState",
     "url"
   ].forEach((property) => {
-    Object.defineProperty(WebSocket2.prototype, property, { enumerable: true });
+    Object.defineProperty(WebSocket.prototype, property, { enumerable: true });
   });
   ["open", "error", "close", "message"].forEach((method) => {
-    Object.defineProperty(WebSocket2.prototype, `on${method}`, {
+    Object.defineProperty(WebSocket.prototype, `on${method}`, {
       enumerable: true,
       get() {
         for (const listener of this.listeners(method)) {
@@ -2120,9 +2120,9 @@ var require_websocket = __commonJS(function(exports, module) {
       }
     });
   });
-  WebSocket2.prototype.addEventListener = addEventListener;
-  WebSocket2.prototype.removeEventListener = removeEventListener;
-  module.exports = WebSocket2;
+  WebSocket.prototype.addEventListener = addEventListener;
+  WebSocket.prototype.removeEventListener = removeEventListener;
+  module.exports = WebSocket;
   function initAsClient(websocket, address, protocols, options) {
     const opts = {
       allowSynchronousEvents: true,
@@ -2306,7 +2306,7 @@ var require_websocket = __commonJS(function(exports, module) {
     });
     req.on("upgrade", (res, socket, head) => {
       websocket.emit("upgrade", res);
-      if (websocket.readyState !== WebSocket2.CONNECTING)
+      if (websocket.readyState !== WebSocket.CONNECTING)
         return;
       req = websocket._req = null;
       const upgrade = res.headers.upgrade;
@@ -2382,7 +2382,7 @@ var require_websocket = __commonJS(function(exports, module) {
     }
   }
   function emitErrorAndClose(websocket, err) {
-    websocket._readyState = WebSocket2.CLOSING;
+    websocket._readyState = WebSocket.CLOSING;
     websocket._errorEmitted = true;
     websocket.emit("error", err);
     websocket.emitClose();
@@ -2399,7 +2399,7 @@ var require_websocket = __commonJS(function(exports, module) {
     return tls.connect(options);
   }
   function abortHandshake(websocket, stream, message) {
-    websocket._readyState = WebSocket2.CLOSING;
+    websocket._readyState = WebSocket.CLOSING;
     const err = new Error(message);
     Error.captureStackTrace(err, abortHandshake);
     if (stream.setHeader) {
@@ -2479,10 +2479,10 @@ var require_websocket = __commonJS(function(exports, module) {
   }
   function senderOnError(err) {
     const websocket = this[kWebSocket];
-    if (websocket.readyState === WebSocket2.CLOSED)
+    if (websocket.readyState === WebSocket.CLOSED)
       return;
-    if (websocket.readyState === WebSocket2.OPEN) {
-      websocket._readyState = WebSocket2.CLOSING;
+    if (websocket.readyState === WebSocket.OPEN) {
+      websocket._readyState = WebSocket.CLOSING;
       setCloseTimer(websocket);
     }
     this._socket.end();
@@ -2499,7 +2499,7 @@ var require_websocket = __commonJS(function(exports, module) {
     this.removeListener("close", socketOnClose);
     this.removeListener("data", socketOnData);
     this.removeListener("end", socketOnEnd);
-    websocket._readyState = WebSocket2.CLOSING;
+    websocket._readyState = WebSocket.CLOSING;
     if (!this._readableState.endEmitted && !websocket._closeFrameReceived && !websocket._receiver._writableState.errorEmitted && this._readableState.length !== 0) {
       const chunk = this.read(this._readableState.length);
       websocket._receiver.write(chunk);
@@ -2521,7 +2521,7 @@ var require_websocket = __commonJS(function(exports, module) {
   }
   function socketOnEnd() {
     const websocket = this[kWebSocket];
-    websocket._readyState = WebSocket2.CLOSING;
+    websocket._readyState = WebSocket.CLOSING;
     websocket._receiver.end();
     this.end();
   }
@@ -2530,7 +2530,7 @@ var require_websocket = __commonJS(function(exports, module) {
     this.removeListener("error", socketOnError);
     this.on("error", NOOP);
     if (websocket) {
-      websocket._readyState = WebSocket2.CLOSING;
+      websocket._readyState = WebSocket.CLOSING;
       this.destroy();
     }
   }
@@ -2538,7 +2538,7 @@ var require_websocket = __commonJS(function(exports, module) {
 
 // ../../node_modules/ws/lib/stream.js
 var require_stream = __commonJS(function(exports, module) {
-  var WebSocket2 = require_websocket();
+  var WebSocket = require_websocket();
   var { Duplex } = __require("stream");
   function emitClose(stream) {
     stream.emit("close");
@@ -2693,7 +2693,7 @@ var require_websocket_server = __commonJS(function(exports, module) {
   var extension = require_extension();
   var PerMessageDeflate = require_permessage_deflate();
   var subprotocol = require_subprotocol();
-  var WebSocket2 = require_websocket();
+  var WebSocket = require_websocket();
   var { CLOSE_TIMEOUT, GUID, kWebSocket } = require_constants();
   var keyRegex = /^[+/0-9A-Za-z]{22}==$/;
   var RUNNING = 0;
@@ -2721,7 +2721,7 @@ var require_websocket_server = __commonJS(function(exports, module) {
         host: null,
         path: null,
         port: null,
-        WebSocket: WebSocket2,
+        WebSocket,
         ...options
       };
       if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
@@ -15707,6 +15707,9 @@ class CanvasController {
 }
 
 // src/client.ts
+import { createRequire as createRequire2 } from "node:module";
+var NodeWebSocket = createRequire2(import.meta.url)("ws");
+
 class RuntimeClient {
   options;
   socket;
@@ -15723,29 +15726,29 @@ class RuntimeClient {
   connect() {
     if (this.stopped)
       return;
-    const socket = this.socket = new WebSocket(this.options.url, { headers: { authorization: `Bearer ${this.options.token}` } });
-    socket.onopen = () => {
+    const socket = this.socket = new NodeWebSocket(this.options.url, { headers: { authorization: `Bearer ${this.options.token}` } });
+    socket.on("open", () => {
       this.delay = 250;
       this.options.onStatus?.(true);
-    };
-    socket.onmessage = (event) => {
+    });
+    socket.on("message", (data) => {
       try {
-        this.options.onMessage(parseRuntimeMessage(JSON.parse(String(event.data))));
+        this.options.onMessage(parseRuntimeMessage(JSON.parse(String(data))));
       } catch {
         socket.close(1008, "invalid runtime message");
       }
-    };
-    socket.onclose = () => {
+    });
+    socket.on("close", () => {
       this.options.onStatus?.(false);
       if (!this.stopped) {
         this.retry = setTimeout(() => this.connect(), this.delay);
         this.delay = Math.min(5000, this.delay * 2);
       }
-    };
-    socket.onerror = () => socket.close();
+    });
+    socket.on("error", () => socket.close());
   }
   send(message) {
-    if (this.socket?.readyState === WebSocket.OPEN)
+    if (this.socket?.readyState === NodeWebSocket.OPEN)
       this.socket.send(JSON.stringify(message));
   }
   stop() {
