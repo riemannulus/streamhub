@@ -21,6 +21,7 @@ export class StudioModel{
   setDefaultPage(pageId:string){this.replace(editing.setDefaultPage(this.document,pageId));}
   deletePage(pageId:string,replacementPageId?:string){const index=this.document.pages.findIndex(page=>page.id===pageId),next=editing.deletePage(this.document,pageId,replacementPageId);this.replace(next);if(this.selectedPageId===pageId)this.selectedPageId=next.pages[Math.min(index,next.pages.length-1)]!.id;}
   setBackground(target:'page'|'standby',assetId:string,fit:'cover'|'contain'|'stretch'='cover'){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.background={assetId,fit};});}
+  setSurfaceColor(target:'page'|'standby',color:string){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.color=color;});}
   setButton(button:ButtonDefinition){this.change(document=>{const page=document.pages.find(page=>page.id===this.selectedPageId)!;page.buttons=[...(page.buttons??[]).filter(item=>item.index!==button.index),button];});}
   removeButton(index:number){this.change(document=>{const page=document.pages.find(page=>page.id===this.selectedPageId)!;page.buttons=page.buttons?.filter(button=>button.index!==index);});}
   setMotion(trigger:keyof StudioDocument['motion'],spec:TransitionSpec){this.change(document=>{document.motion[trigger]=spec;});}

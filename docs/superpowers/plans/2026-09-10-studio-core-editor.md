@@ -332,7 +332,7 @@ Commit: `feat(studio): expose safe local action catalogs`
 - Produces a four-pane UI: page sidebar, searchable action library, 5×3 canvas, contextual inspector.
 - Components receive `StudioModel` commands; they do not mutate document objects directly.
 
-- [ ] **Step 1: Write state tests for selection and visible inspector fields**
+- [x] **Step 1: Write state tests for selection and visible inspector fields**
 
 ```ts
 expect(inspectorFor(openAppButton)).toEqual(['action','content-mode','icon','label','background']);
@@ -340,23 +340,23 @@ expect(inspectorFor(pageIndicatorButton)).toEqual(['content-mode','icon','label'
 expect(filteredActions('페이지')).toEqual(expect.arrayContaining(['go-to-page','previous-page','next-page','page-indicator']));
 ```
 
-- [ ] **Step 2: Split browser responsibilities before adding controls**
+- [x] **Step 2: Split browser responsibilities before adding controls**
 
 Move fetch/bootstrap/apply into `state.ts`; page DOM into `pages-view.ts`; palette DOM into `action-library.ts`; geometry/drop targets into `canvas-view.ts`; form visibility and validation into `inspector-view.ts`. Keep one `render()` coordinator in `app.ts`.
 
-- [ ] **Step 3: Implement page sidebar and action library**
+- [x] **Step 3: Implement page sidebar and action library**
 
 Expose add, rename, duplicate, delete, reorder, default, and standby. Group exact actions from spec section 4.2; search matches Korean label and stable action type.
 
-- [ ] **Step 4: Implement action-specific inspectors**
+- [x] **Step 4: Implement action-specific inspectors**
 
 Use app catalog picker, path picker, URL input, hotkey capture, text mode, media enum, registered command args, page target, and indicator. Do not show irrelevant fields.
 
-- [ ] **Step 5: Implement four appearance modes**
+- [x] **Step 5: Implement four appearance modes**
 
 Show a four-option segmented control. Disable label fields when mode lacks label; disable icon fields when mode lacks icon. Hidden buttons remain outlined only in edit mode.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `bun test packages/editor/web packages/editor/server.test.ts && bun run typecheck`
 

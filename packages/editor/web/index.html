@@ -1,6 +1,36 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Streamhub Studio</title><link rel="stylesheet" href="/style.css"></head><body>
-<header><div class="brand">Streamhub <b>Studio</b><span>PLUGIN</span></div><div class="workspace-name">▦ 작업 공간</div><div class="connection"><i></i><span id="runtime">Runtime 확인 중</span></div><span id="state">불러오는 중</span><button id="undo">↶</button><button id="redo">↷</button><button id="apply" class="primary" disabled>장치에 적용</button></header>
-<div id="error" role="alert" hidden></div><main><aside class="sidebar"><div class="aside-title"><span>화면</span><button id="add-page">＋</button></div><nav id="pages"></nav><button id="standby" class="page-row"><b>☾</b><span>대기 화면<small>잠금·절전</small></span></button><section><h3>현재 화면</h3><label>배경 이미지<input id="background" type="file" accept="image/png,image/jpeg,image/webp"></label><label>맞춤<select id="fit"><option value="cover">화면 채우기</option><option value="contain">전체 보기</option><option value="stretch">늘이기</option></select></label></section><section id="dynamic"><h3>자동 버튼 영역</h3><label>소스<select id="region-source"></select></label><label>키 번호<input id="region-keys" placeholder="2, 3, 4"></label><button id="save-region">영역 저장</button></section></aside>
-<section class="stage"><div class="stage-head"><div><small id="crumb">페이지 / 홈</small><h1 id="title">버튼이 놓일 화면을 만드세요</h1></div><span>480 × 272 미리보기</span></div><div class="device"><div class="device-label">STREAM DECK · 5 × 3</div><div id="canvas" class="canvas"></div></div><p class="hint">배경은 한 장으로 렌더링됩니다. 키 사이의 간격까지 같은 좌표계를 사용합니다.</p><section class="motion"><h2>움직임</h2><div class="motion-grid"><label>페이지 전환<select id="page-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label><label>잠금 해제<select id="unlock-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label><label>재연결<select id="reconnect-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label></div></section></section>
-<aside class="inspector"><div class="inspector-title"><span class="spark">✦</span><div><h2 id="key-title">버튼 1</h2><small>선택한 키</small></div></div><label>버튼 종류<select id="button-type"><option value="empty">배경만 표시</option><option value="app">앱 실행</option><option value="open">웹사이트 열기</option><option value="text">텍스트</option></select></label><div id="button-fields"><label>이름<input id="button-label" placeholder="Firefox"></label><label id="bundle-label">앱 Bundle ID<input id="button-value" placeholder="org.mozilla.firefox"></label><label>아이콘<input id="icon" type="file" accept="image/png,image/jpeg,image/webp"></label><label>버튼 표시 <output id="opacity-value">0%</output><input id="opacity" type="range" min="0" max="100" value="0"></label><p>0%로 두면 배경 위에 완전히 투명한 버튼으로 동작합니다.</p></div><div class="position"><span>위치</span><b id="position">1행 1열 · 키 1</b></div></aside></main>
-<script type="module" src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Streamhub Studio</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <header>
+    <div class="brand"><span class="brand-mark">S</span><strong>Streamhub</strong><b>Studio</b></div>
+    <div class="workspace">작업 공간 <small>Stream Deck 5×3</small></div>
+    <div class="header-spacer"></div><div class="runtime"><i id="runtime-dot"></i><span id="runtime">Runtime 확인 중</span></div><span id="state">불러오는 중</span>
+    <button id="undo" class="header-button" title="실행 취소">↶</button><button id="redo" class="header-button" title="다시 실행">↷</button><button id="apply" class="primary" disabled>장치에 적용</button>
+  </header>
+  <div id="error" role="alert" hidden></div>
+  <main>
+    <aside class="pane pages-pane">
+      <div class="pane-title"><div><b>화면</b><small>페이지와 대기 화면</small></div><button id="add-page" title="페이지 추가">＋</button></div>
+      <nav id="pages"></nav>
+    </aside>
+    <aside id="action-pane" class="pane action-pane">
+      <div class="pane-title"><div><b>동작</b><small>클릭하거나 키로 끌기</small></div></div>
+      <label class="search"><span>⌕</span><input id="action-search" type="search" placeholder="동작 검색"></label>
+      <div id="actions"></div>
+    </aside>
+    <section class="stage">
+      <div class="surface-bar">
+        <div><small id="surface-description">키 전체에 이어지는 배경을 설정합니다.</small><h1 id="surface-title">홈</h1></div>
+        <div class="surface-controls"><label>배경<input id="background-file" type="file" accept="image/png,image/jpeg,image/webp"></label><label>맞춤<select id="background-fit"><option value="cover">채우기</option><option value="contain">전체 보기</option><option value="stretch">늘이기</option></select></label><label>바탕색<input id="surface-color" type="color" value="#05070a"></label></div>
+      </div>
+      <div id="page-settings" class="page-settings"><label>페이지 이름<input id="page-name"></label><label class="check"><input id="default-page" type="checkbox"> 기본 페이지</label></div>
+      <div class="device-shell"><div class="device-top"><span>STREAM DECK</span><small>5 × 3 CANVAS</small></div><div id="canvas" class="canvas" aria-label="Stream Deck 캔버스"></div></div>
+      <p class="canvas-help">배경은 하나의 480×272 화면으로 합성됩니다. 점선은 편집할 때만 보입니다.</p>
+      <details class="motion"><summary>화면 전환 설정</summary><div><label>페이지 전환<select id="page-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label><label>잠금 해제<select id="unlock-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label><label>재연결<select id="reconnect-motion"><option value="crossfade">크로스페이드</option><option value="fade-through-black">검정으로 페이드</option><option value="none">없음</option></select></label></div></details>
+    </section>
+    <aside id="inspector" class="pane inspector"></aside>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
