@@ -1,7 +1,8 @@
 import {singlePressBehavior,type ButtonAction,type ButtonDefinition} from '../../studio/document';
 
 export type ActionGroup='기본'|'탐색'|'데이터';
-export type ActionType=ButtonAction['type']|'dynamic-region'|'dynamic-previous'|'dynamic-next'|'dynamic-pin';
+export type AdvancedActionType='multi-action'|'toggle-action'|'double-press'|'hold-action';
+export type ActionType=ButtonAction['type']|AdvancedActionType|'dynamic-region'|'dynamic-previous'|'dynamic-next'|'dynamic-pin';
 export type ActionItem={type:ActionType;label:string;description:string;group:ActionGroup;available:boolean;symbol:string};
 
 export const ACTION_ITEMS:readonly ActionItem[]=[
@@ -13,6 +14,10 @@ export const ACTION_ITEMS:readonly ActionItem[]=[
   {type:'media',label:'미디어',description:'재생과 음량을 제어합니다',group:'기본',available:true,symbol:'▶'},
   {type:'registered',label:'등록된 명령',description:'Runtime에 허용된 명령을 실행합니다',group:'기본',available:true,symbol:'›_'},
   {type:'none',label:'표시 전용',description:'누르지 않는 안내 키입니다',group:'기본',available:true,symbol:'◇'},
+  {type:'multi-action',label:'여러 동작',description:'선택한 버튼에 순서 동작을 만듭니다',group:'기본',available:true,symbol:'≡'},
+  {type:'toggle-action',label:'토글',description:'꺼짐과 켜짐 동작을 나눕니다',group:'기본',available:true,symbol:'⇄'},
+  {type:'double-press',label:'두 번 누르기',description:'선택한 버튼에 두 번 분기를 추가합니다',group:'기본',available:true,symbol:'×2'},
+  {type:'hold-action',label:'길게 누르기',description:'선택한 버튼에 길게 분기를 추가합니다',group:'기본',available:true,symbol:'↧'},
   {type:'go-to-page',label:'특정 페이지로 이동',description:'고른 페이지를 바로 엽니다',group:'탐색',available:true,symbol:'⌁'},
   {type:'previous-page',label:'이전 페이지',description:'바깥 페이지를 한 칸 이동합니다',group:'탐색',available:true,symbol:'‹'},
   {type:'next-page',label:'다음 페이지',description:'바깥 페이지를 한 칸 이동합니다',group:'탐색',available:true,symbol:'›'},
@@ -44,11 +49,11 @@ export function createButtonForAction(type:ButtonAction['type'],index:number,opt
   return{id:crypto.randomUUID(),index,behavior:singlePressBehavior(action),appearance:{contentMode:'label-only',label:{text:item.label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
 }
 
-export function renderActionLibrary(container:HTMLElement,query:string,onChoose:(type:ButtonAction['type'])=>void):void{
+export function renderActionLibrary(container:HTMLElement,query:string,onChoose:(type:ActionType)=>void):void{
   const visible=new Set(filteredActions(query));container.replaceChildren();
   for(const group of ['기본','탐색','데이터'] as const){
     const items=ACTION_ITEMS.filter(item=>item.group===group&&visible.has(item.type));if(!items.length)continue;
     const section=document.createElement('section'),title=document.createElement('h3');title.textContent=group;section.append(title);
-    for(const item of items){const button=document.createElement('button');button.className='action-item';button.disabled=!item.available;button.draggable=item.available;button.dataset.action=item.type;button.innerHTML=`<span>${item.symbol}</span><b></b><small></small>`;button.querySelector('b')!.textContent=item.label;button.querySelector('small')!.textContent=item.description;button.onclick=()=>item.available&&onChoose(item.type as ButtonAction['type']);button.ondragstart=event=>{event.dataTransfer?.setData('application/x-streamhub-action',item.type);};section.append(button);}container.append(section);
+    for(const item of items){const button=document.createElement('button'),advanced=['multi-action','toggle-action','double-press','hold-action'].includes(item.type);button.className='action-item';button.disabled=!item.available;button.draggable=item.available&&!advanced;button.dataset.action=item.type;button.innerHTML=`<span>${item.symbol}</span><b></b><small></small>`;button.querySelector('b')!.textContent=item.label;button.querySelector('small')!.textContent=item.description;button.onclick=()=>item.available&&onChoose(item.type);button.ondragstart=event=>{if(!advanced)event.dataTransfer?.setData('application/x-streamhub-action',item.type);};section.append(button);}container.append(section);
   }
 }

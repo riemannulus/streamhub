@@ -1,6 +1,7 @@
 import type {AppCatalogItem,PathPickerResult} from '../../host/src/catalog';
 import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,singlePressBehavior,type ButtonAction,type ButtonDefinition, type ButtonAppearance} from '../../studio/document';
 import type {StudioModel} from './model';
+import {renderBehaviorEditor,selectedBranchFor,setSingleAction} from './behavior-editor';
 
 export type InspectorField='empty'|'action'|'content-mode'|'icon'|'label'|'background';
 export function inspectorFor(button?:ButtonDefinition):InspectorField[]{
@@ -10,7 +11,7 @@ export function inspectorFor(button?:ButtonDefinition):InspectorField[]{
   return currentAction.type==='none'||currentAction.type==='previous-page'||currentAction.type==='next-page'||currentAction.type==='page-indicator'||currentAction.type==='resume-auto-page'?[...appearance]:['action',...appearance];
 }
 
-type Resources={apps:AppCatalogItem[];actions:{name:string;args:string[]}[];upload(file:File):Promise<string>;pick(kind:'file'|'folder'):Promise<PathPickerResult>;changed():void;error(message:string):void};
+type Resources={apps:AppCatalogItem[];actions:{name:string;args:string[]}[];upload(file:File):Promise<string>;pick(kind:'file'|'folder'):Promise<PathPickerResult>;changed():void;error(message:string):void;refresh():void};
 const control=(label:string,node:HTMLElement)=>{const wrapper=document.createElement('label');wrapper.append(document.createTextNode(label),node);return wrapper;};
 const input=(value='',type='text')=>Object.assign(document.createElement('input'),{value,type});
 const select=(values:{value:string;label:string}[],value:string)=>{const node=document.createElement('select');for(const item of values)node.add(new Option(item.label,item.value));node.value=value;return node;};
@@ -22,7 +23,8 @@ export function renderInspector(container:HTMLElement,model:StudioModel,resource
   const heading=document.createElement('div');heading.className='inspector-heading';heading.innerHTML=`<span>✦</span><div><h2></h2><small></small></div>`;heading.querySelector('h2')!.textContent=button?(button.appearance.label?.text||`버튼 ${model.selectedKey+1}`):`빈 키 ${model.selectedKey+1}`;heading.querySelector('small')!.textContent=`${Math.floor(model.selectedKey/5)+1}행 ${model.selectedKey%5+1}열`;container.append(heading);
   if(!button){const empty=document.createElement('div');empty.className='empty-inspector';empty.innerHTML='<b>동작을 선택하세요</b><p>왼쪽 동작을 클릭하거나 이 키로 끌어 놓으세요.</p>';container.append(empty);return;}
   const update=(mutator:(next:ButtonDefinition)=>void)=>{const next=structuredClone(button);mutator(next);try{model.setButton(next);resources.changed();}catch(error){resources.error(error instanceof Error?error.message:String(error));}};
-  const currentAction=primaryButtonAction(button),updateAction=(action:ButtonAction)=>update(next=>{next.behavior=singlePressBehavior(action);});
+  const selectedBranch=selectedBranchFor(button.id),selectedProgram=button.behavior[selectedBranch],currentAction=selectedProgram?.type==='single'?selectedProgram.action:primaryButtonAction(button),updateAction=(action:ButtonAction)=>{try{model.setButton(setSingleAction(button,selectedBranch,action));resources.changed();}catch(error){resources.error(error instanceof Error?error.message:String(error));}};
+  const behavior=document.createElement('section');renderBehaviorEditor(behavior,button,next=>{try{model.setButton(next);resources.changed();}catch(error){resources.error(error instanceof Error?error.message:String(error));}},resources.refresh);container.append(behavior);
   const action=document.createElement('section');action.className='inspector-section';action.innerHTML='<h3>누르면 할 일</h3>';container.append(action);
   if(currentAction.type==='open-app'){
     const picker=select(resources.apps.map(app=>({value:app.bundleId,label:app.name})),currentAction.bundleId);picker.onchange=()=>updateAction({type:'open-app',bundleId:picker.value});action.append(control('앱',picker));const meta=document.createElement('small');meta.textContent=currentAction.bundleId;action.append(meta);

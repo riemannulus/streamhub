@@ -1,4 +1,4 @@
-import {validateStudioDocument,type ButtonDefinition,type StudioDocument,type TransitionSpec} from '../../studio/document';
+import {validateKeyBehavior,validateStudioDocument,type ButtonDefinition,type KeyBehavior,type StudioDocument,type TransitionSpec} from '../../studio/document';
 import * as editing from '../editing';
 import * as buttonEditing from './clipboard';
 
@@ -25,6 +25,7 @@ export class StudioModel{
   setBackground(target:'page'|'standby',assetId:string,fit:'cover'|'contain'|'stretch'='cover'){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.background={assetId,fit};});}
   setSurfaceColor(target:'page'|'standby',color:string){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.color=color;});}
   setButton(button:ButtonDefinition){this.change(document=>{const page=document.pages.find(page=>page.id===this.selectedPageId)!;page.buttons=[...(page.buttons??[]).filter(item=>item.index!==button.index),button];});}
+  setSelectedButtonBehavior(behavior:KeyBehavior){this.change(document=>{const button=document.pages.find(page=>page.id===this.selectedPageId)?.buttons?.find(button=>button.index===this.selectedKey);if(!button)throw new Error('선택한 버튼이 없습니다.');button.behavior=validateKeyBehavior(behavior);});}
   copyButton(){this.clipboard=buttonEditing.copyButton(this.document,this.selectedPageId,this.selectedKey);}
   pasteButton(){if(!this.clipboard)throw new Error('복사한 버튼이 없습니다.');return this.replace(buttonEditing.pasteButton(this.document,this.selectedPageId,this.selectedKey,this.clipboard));}
   duplicateButton(targetIndex?:number){const page=this.document.pages.find(page=>page.id===this.selectedPageId)!,target=targetIndex??Array.from({length:15},(_,index)=>index).find(index=>!page.buttons?.some(button=>button.index===index));if(target===undefined)throw new Error('빈 키가 없습니다.');const changed=this.replace(buttonEditing.duplicateButton(this.document,this.selectedPageId,this.selectedKey,target));this.selectedKey=target;return changed;}

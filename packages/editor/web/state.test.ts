@@ -23,7 +23,7 @@ test('inspector fields depend on action while appearance fields stay explicit',(
 });
 
 test('every available core library action creates a valid v3 button',()=>{
-  const types=filteredActions('').filter(type=>!type.startsWith('dynamic-')) as ButtonAction['type'][];
+  const types=filteredActions('').filter(type=>!type.startsWith('dynamic-')&&!['multi-action','toggle-action','double-press','hold-action'].includes(type)) as ButtonAction['type'][];
   for(const [index,type] of types.entries()){
     const document=defaultStudioDocument();document.pages[0].buttons=[createButtonForAction(type,index,{pageId:'home',appBundleId:'org.mozilla.firefox',registered:[{name:'build',args:['target']} ]})];
     expect(()=>validateStudioDocument(document,{actions:{build:{args:{target:{}}}}})).not.toThrow();

@@ -236,19 +236,19 @@ Commit: `feat(runtime): persist safe button toggle state`
 - Adds `여러 동작`, `토글`, `두 번 누르기`, and `길게 누르기` to the basic action group after M1.
 - The editor manipulates `KeyBehavior` through model commands; DOM handlers do not mutate arrays directly.
 
-- [ ] **Step 1: Write pure behavior editor tests**
+- [x] **Step 1: Write pure behavior editor tests**
 
 Cover add/remove/reorder step, change sequential/parallel, add delay, configure off/on branches, enable/disable double and hold, threshold validation, and one undo entry per visible edit.
 
-- [ ] **Step 2: Implement a branch-first inspector**
+- [x] **Step 2: Implement a branch-first inspector**
 
 Show tabs `누르기`, `두 번`, `길게`; within the selected branch show single/multiple/toggle. Disable delay in parallel mode and show why. Present navigation-final and 16-step limits before save.
 
-- [ ] **Step 3: Add state previews**
+- [x] **Step 3: Add state previews**
 
 For a toggle button, provide `꺼짐 미리보기` and `켜짐 미리보기`. For gesture branches, preview uses the same base appearance unless the user explicitly configures branch badges; no alternate hidden runtime schema is introduced.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `bun test packages/editor/web/behavior-editor.test.ts packages/editor/web/model.test.ts && bun run typecheck`
 
