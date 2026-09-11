@@ -1,11 +1,11 @@
 import { join } from 'node:path';
-import { SessionDeck, type DeckLayout, type ButtonEffect } from '../../streamdeck';
-import { DisplayLifecycle, type DisplayDevice } from '../../streamdeck/lifecycle';
-import { openHidDisplay } from '../../streamdeck/hid';
-import { startSessionMonitor, type SessionState } from './session-monitor';
-import type { SignalStore } from './store';
-import { PageBoard, validatePageConfig, type PageBoardLayout, type PageConfig } from '../../streamdeck/pages';
-import { startAppContextMonitor, type ApplicationContext } from './app-context';
+import { SessionDeck, type DeckLayout, type ButtonEffect } from '../streamdeck';
+import { DisplayLifecycle, type DisplayDevice } from '../streamdeck/lifecycle';
+import { openHidDisplay } from '../streamdeck/hid';
+import { startSessionMonitor, type SessionState } from '../host/src/session-monitor';
+import type { SignalStore } from '../host/src/store';
+import { PageBoard, validatePageConfig, type PageBoardLayout, type PageConfig } from '../streamdeck/pages';
+import { startAppContextMonitor, type ApplicationContext } from '../host/src/app-context';
 
 type DisplayOptions={
   connect?:(onKey:(index:number,edge:'down'|'up')=>void,onError:(error:unknown)=>void)=>Promise<DisplayDevice>;
@@ -16,7 +16,8 @@ type DisplayOptions={
   board?:PageConfig;
   context?:(callback:(value:ApplicationContext)=>void)=>Promise<{stop():Promise<void>}>;
 };
-export async function startDisplay(store:SignalStore,directory:string,options:DisplayOptions={}){
+/** PageConfig simulator retained for historical scenario fixtures; never used by Runtime or physical devices. */
+export async function startLegacySimulationDisplay(store:SignalStore,directory:string,options:DisplayOptions={}){
   const cancelled=()=>new DOMException('Display startup was cancelled','AbortError');
   if(options.signal?.aborted)throw cancelled();
   const layoutName=options.board?'streamdeck-pages-v1-15x72':'streamdeck-v1-15x72';

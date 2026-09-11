@@ -18,16 +18,17 @@ function path() {
 }
 const valid = () => ({ port: 31415, adminToken: 'a'.repeat(32), sources: { demo: { token: 'b'.repeat(32) } } });
 
-test('page configuration validates references before saving and preserves existing configuration', () => {
+test('legacy page configuration is validated on read and removed by the next explicit save', () => {
   const file = path();
   const original = readConfig(true);
   const board = {defaultPage:'home',transition:'fade' as const,durationMs:250,pages:[{id:'home',title:'Home',signals:{},buttons:[{index:13,type:'auto' as const}]}]};
   expect(() => validateConfig({...original,streamdeck:{enabled:true,board}})).not.toThrow();
-  updateConfig(config => ({...config,streamdeck:{enabled:true,board}}));
+  writeFileSync(file,JSON.stringify({...original,streamdeck:{enabled:true,board}}));
+  updateConfig(config => config);
   expect(readConfig().adminToken).toBe(original.adminToken);
-  const before = readFileSync(file, 'utf8');
-  expect(() => updateConfig(config => ({...config,streamdeck:{enabled:true,board:{...board,defaultPage:'missing'}}}))).toThrow();
-  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(JSON.parse(readFileSync(file,'utf8'))).not.toHaveProperty('streamdeck');
+  writeFileSync(file,JSON.stringify({...original,streamdeck:{enabled:true,board:{...board,defaultPage:'missing'}}}));
+  expect(()=>readConfig()).toThrow();
 });
 
 test('initialization and registration preserve tokens and unknown settings across repeated updates', () => {
@@ -36,8 +37,8 @@ test('initialization and registration preserve tokens and unknown settings acros
   expect(statSync(file).mode & 0o777).toBe(0o600);
   const configured = { ...first, port: 31416, future: { setting: true } };
   writeFileSync(file, JSON.stringify(configured));
-  for (let i = 0; i < 2; i++) updateConfig(config => ({ ...config,display:{...config.display,mode:'hid'},streamdeck: { enabled: true } }));
-  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...configured,display:{mode:'hid'},streamdeck: { enabled: true } });
+  for (let i = 0; i < 2; i++) updateConfig(config => ({ ...config,display:{...config.display,mode:'hid'} }));
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...configured,display:{mode:'hid'} });
   expect(statSync(file).mode & 0o777).toBe(0o600);
   expect(readConfig(true).adminToken).toBe(first.adminToken);
 });
@@ -78,14 +79,11 @@ test('registration CLI creates configuration and safely repeats using shared upd
   };
   await run();
   const first = readConfig();
-  expect(first.streamdeck?.enabled).toBe(true);
+  expect(first.display.mode).toBe('hid');
   await run();
   expect(readConfig()).toEqual(first);
-  await run('--pages', new URL('../../../examples/pages.json', import.meta.url).pathname);
-  expect(readConfig().streamdeck?.board?.pages).toHaveLength(2);
   expect(readConfig().adminToken).toBe(first.adminToken);
-  await run();
-  expect(readConfig().streamdeck?.board?.transition).toBe('fade');
+  const raw=JSON.parse(readFileSync(file,'utf8'));expect(raw).not.toHaveProperty('streamdeck');expect(raw).not.toHaveProperty('streamdeckPlugin');
 });
 
 test('fixed action buttons validate registered names and arguments before startup',()=>{
@@ -99,7 +97,7 @@ test('fixed action buttons validate registered names and arguments before startu
 
 test('plugin-only config requires an absolute private token path and valid port',()=>{
   const base={port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}}};
-  expect(validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'/tmp/streamhub-token'}}).streamdeckPlugin?.enabled).toBe(true);
+  expect(validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'/tmp/streamhub-token'}}).display.mode).toBe('plugin');
   expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'relative'}})).toThrow();
   expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:0,tokenFile:'/tmp/token'}})).toThrow();
 });
@@ -108,13 +106,13 @@ test('canonical display mode is authoritative and keeps legacy owners mutually e
   const plugin={port:31417,tokenFile:'/tmp/streamhub-token'};
   const canonical=validateConfig({...valid(),display:{mode:'plugin',plugin},streamdeck:{enabled:true}});
   expect(configuredDisplay(canonical)).toEqual({mode:'plugin',plugin});
-  expect(canonical.streamdeck?.enabled).toBe(false);
-  expect(canonical.streamdeckPlugin?.enabled).toBe(true);
+  expect(canonical).not.toHaveProperty('streamdeck');
+  expect(canonical).not.toHaveProperty('streamdeckPlugin');
 
   const hid=validateConfig({...valid(),display:{mode:'hid'},streamdeckPlugin:{enabled:true,...plugin}});
   expect(configuredDisplay(hid)).toEqual({mode:'hid',plugin});
-  expect(hid.streamdeck?.enabled).toBe(true);
-  expect(hid.streamdeckPlugin?.enabled).toBe(false);
+  expect(hid).not.toHaveProperty('streamdeck');
+  expect(hid).not.toHaveProperty('streamdeckPlugin');
 });
 
 test('legacy display ownership normalizes safely and rejects two enabled owners',()=>{

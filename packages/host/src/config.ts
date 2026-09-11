@@ -12,8 +12,6 @@ export type DisplayConfig = { mode: DisplayMode; plugin?: { port: number; tokenF
 export type Config = AuthConfig & {
   port: number;
   display: DisplayConfig;
-  streamdeck?: { enabled: boolean; board?: PageConfig };
-  streamdeckPlugin?: {enabled:boolean;port:number;tokenFile:string};
   actions?: Record<string, ActionDefinition>;
   collectors?: Array<{ source: string; exec: string[]; intervalMs: number; timeoutMs?: number }>;
 };
@@ -69,10 +67,8 @@ export function validateConfig(input: unknown): Config {
     display={mode:legacyHid?'hid':legacyPluginEnabled?'plugin':'off',...(legacyPlugin?{plugin:legacyPlugin}:{})};
   }
   const legacyBoard=record(config.streamdeck)?config.streamdeck.board:undefined;
-  config={...config,display,
-    ...(config.streamdeck!==undefined||display.mode==='hid'?{streamdeck:{enabled:display.mode==='hid',...(legacyBoard===undefined?{}:{board:legacyBoard})}}:{}),
-    ...(display.plugin?{streamdeckPlugin:{enabled:display.mode==='plugin',...display.plugin}}:{}),
-  };
+  const {streamdeck:_legacyHid,streamdeckPlugin:_legacyPlugin,...canonical}=config;
+  config={...canonical,display};
   if (config.actions !== undefined) {
     if (!record(config.actions)) throw new Error('Invalid actions');
     for (const action of Object.values(config.actions)) {
@@ -95,7 +91,7 @@ export function validateConfig(input: unknown): Config {
     new ActionRegistry({ collect: { exec: collector.exec, args: {}, sources: [collector.source], timeoutMs: collector.timeoutMs as number | undefined, maxOutputBytes: 1048576 } });
     collected.add(collector.source);
   }
-  if (config.streamdeck && (config.streamdeck as Config['streamdeck'])?.board) validateButtonActions((config.streamdeck as NonNullable<Config['streamdeck']>).board!, config.actions as Config['actions']);
+  if (legacyBoard) validateButtonActions(legacyBoard as PageConfig, config.actions as Config['actions']);
   return config as Config;
 }
 

@@ -3,8 +3,6 @@ import {isAbsolute} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {validateConfig,type Config} from '../host/src/config';
 import type {ActionDefinition} from '../host/src/actions';
-import type {PageDefinition} from '../streamdeck/pages';
-import {CONTENT_KEYS} from '../streamdeck';
 
 type Identity={source?:string;id?:string;label?:string};
 function identity(options:Identity){
@@ -19,28 +17,9 @@ export function registerCommandSource(input:Config,options:RegistrationOptions):
   for(const path of [options.configFile,options.cwd,options.bun,options.script])if(!isAbsolute(path))throw new Error('Registration paths must be absolute');
   const argv=options.argv??[options.bun,'run','check'];validateArgv(argv);
   const action:ActionDefinition={exec:[options.bun,options.script,'--source',source,'--id',id,'--label',label,'--',...argv],args:{},sources:[source],cwd:options.cwd,env:{STREAMHUB_CONFIG:options.configFile},timeoutMs:60000,maxOutputBytes:1048576};
-  const page:PageDefinition={id:'build-workflow',title:label,signals:{source},buttons:[{index:12,type:'action',label:'검사 실행',name:'run-checks',args:{}},{index:13,type:'auto',label:'자동'}]};
   const existingAction=config.actions?.['run-checks'];
   if(existingAction&&!isDeepStrictEqual(existingAction,action))throw new Error('run-checks action already exists with different settings');
-  const existingPage=config.streamdeck?.board?.pages.find(candidate=>candidate.id===page.id);
-  if(existingPage&&!isDeepStrictEqual(existingPage,page))throw new Error('build-workflow page already exists with different settings');
-  const currentBoard=config.streamdeck?.board;
-  let board=currentBoard;
-  if(currentBoard){
-    const pages=existingPage?currentBoard.pages:[...currentBoard.pages,page];
-    const home=pages.find(candidate=>candidate.id===currentBoard.defaultPage)!;
-    const linked=currentBoard.defaultPage===page.id||home.buttons?.some(button=>button.type==='page'&&button.pageId===page.id);
-    if(linked)board={...currentBoard,pages};
-    else{
-      const occupied=new Set([...(home.buttons??[]).map(button=>button.index),...(home.regions??[]).flatMap(region=>region.keys)]);
-      const index=[...CONTENT_KEYS].reverse().find(candidate=>!occupied.has(candidate));
-      if(index===undefined)throw new Error('Default page has no free key for the build-workflow link');
-      const linkedHome={...home,buttons:[...(home.buttons??[]),{index,type:'page' as const,pageId:page.id,label:'검사'}]};
-      board={...currentBoard,pages:pages.map(candidate=>candidate.id===linkedHome.id?linkedHome:candidate)};
-    }
-  }else board={defaultPage:page.id,pages:[page],transition:'fade',durationMs:250};
-  return validateConfig({...config,sources:{...config.sources,[source]:config.sources[source]??{token:randomUUID()+randomUUID()}},actions:{...config.actions,'run-checks':action},
-    streamdeck:{...config.streamdeck,enabled:config.streamdeck?.enabled??false,board}});
+  return validateConfig({...config,sources:{...config.sources,[source]:config.sources[source]??{token:randomUUID()+randomUUID()}},actions:{...config.actions,'run-checks':action}});
 }
 function validateArgv(argv:string[]){if(!Array.isArray(argv)||!argv.length||argv.some(arg=>typeof arg!=='string'||arg.includes('\0'))||!argv[0])throw new Error('A command argv is required');}
 export type RunCommandOptions=Identity&{argv:string[];cwd?:string;signal?:AbortSignal};

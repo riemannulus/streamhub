@@ -5,26 +5,19 @@ import {join} from 'node:path';
 import {registerCommandSource,runCommandSource} from './command';
 import {startHost} from '../host/src/runtime';
 import {startServer} from '../host/src/server';
-import {startDisplay} from '../host/src/display';
 import type {Config} from '../host/src/config';
-const config=():Config=>({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'off'},streamdeck:{enabled:false,board:{defaultPage:'home',pages:[{id:'home',title:'Home',signals:{}}]}}});
+const config=():Config=>({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'off'}});
 const registration={configFile:'/tmp/config.json',cwd:'/tmp',bun:process.execPath,script:'/tmp/run-command-source.ts'};
-test('command source registration preserves settings and repeats without duplicating credentials/actions/pages',()=>{
+test('command source registration preserves settings and repeats without duplicating credentials or actions',()=>{
   const initial={...config(),extension:{keep:true}},registered=registerCommandSource(initial,registration);
   expect(registered.adminToken).toBe(initial.adminToken);expect(registered.sources.demo).toEqual(initial.sources.demo);
-  expect(registered.streamdeck?.enabled).toBe(false);expect(registered.streamdeck?.board?.defaultPage).toBe('home');
-  expect(registered.streamdeck?.board?.pages).toHaveLength(2);expect(registered.sources.build.token.length).toBeGreaterThanOrEqual(32);
-  expect(registered.streamdeck?.board?.pages[0].buttons).toEqual([{index:12,type:'page',pageId:'build-workflow',label:'검사'}]);
+  expect(registered.display.mode).toBe('off');expect(registered.sources.build.token.length).toBeGreaterThanOrEqual(32);
   expect(registerCommandSource(registered,registration)).toEqual(registered);
   expect((registered as Config&{extension:unknown}).extension).toEqual({keep:true});
   expect(registered.actions?.['run-checks'].exec).not.toContain(registered.sources.build.token);
   expect(registered.actions?.['run-checks'].env).toEqual({STREAMHUB_CONFIG:'/tmp/config.json'});
-  expect(initial.streamdeck?.board?.pages).toHaveLength(1);
 });
-test('registration refuses conflicting user pages/actions and invalid commands',()=>{
-  const base=config();
-  base.streamdeck!.board!.pages.push({id:'build-workflow',title:'User page'});
-  expect(()=>registerCommandSource(base,registration)).toThrow('page already exists');
+test('registration refuses conflicting user actions and invalid commands',()=>{
   expect(()=>registerCommandSource({...config(),actions:{'run-checks':{exec:['/usr/bin/true'],args:{},sources:['demo']}}},registration)).toThrow('action already exists');
   expect(()=>registerCommandSource(config(),{...registration,argv:[]})).toThrow();
   expect(()=>registerCommandSource(config(),{...registration,source:'bad source'})).toThrow();
@@ -39,11 +32,11 @@ test('package command registers a runnable source without replacing existing set
     });
     const [stdout,exitCode]=await Promise.all([new Response(child.stdout).text(),child.exited]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('build-workflow');
+    expect(stdout).toContain('run-checks');
     const registered=JSON.parse(readFileSync(file,'utf8')) as Config;
     expect(registered.sources.build.token.length).toBeGreaterThanOrEqual(32);
     expect(registered.actions?.['run-checks'].exec).toEqual([process.execPath,new URL('../../scripts/run-command-source.ts',import.meta.url).pathname,'--source','build','--id','checks','--label','프로젝트 검사','--',process.execPath,'-e','process.exit(0)']);
-    expect(registered.streamdeck?.board?.pages).toMatchObject([{id:'build-workflow'}]);
+    expect(registered).not.toHaveProperty('streamdeck');
   }finally{rmSync(directory,{recursive:true,force:true});}
 });
 test('package run command publishes the supplied command result through the real host',async()=>{
@@ -64,30 +57,6 @@ test('package run command publishes the supplied command result through the real
     expect(state.records).toMatchObject([{source:'build',label:'프로젝트 검사 · 통과',level:'info'}]);
   }finally{await host.stop();rmSync(directory,{recursive:true,force:true});}
 });
-test('registered page key runs the command and renders its retained signal through the host display',async()=>{
-  const directory=mkdtempSync(join(tmpdir(),'streamhub-command-deck-'));
-  const file=join(directory,'config.json'),repository=new URL('../../',import.meta.url).pathname;
-  const probe=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response()});
-  const port=probe.port!;await probe.stop(true);
-  const registered=registerCommandSource({port,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'hid'},streamdeck:{enabled:true}},
-    {...registration,configFile:file,cwd:repository,script:new URL('../../scripts/run-command-source.ts',import.meta.url).pathname,argv:[process.execPath,'-e','process.exit(0)']});
-  writeFileSync(file,JSON.stringify(registered));
-  let key:((index:number,edge:'down'|'up')=>void)|undefined;
-  const host=await startHost(registered,directory,{dependencies:{display:(store,path,options)=>startDisplay(store,path,{
-    ...options,pollMs:5,monitor:async callback=>{callback({active:true,reason:'active'});return{stop:async()=>{}};},
-    connect:async onKey=>{key=onKey;return{write:async()=>{},standby:async()=>{},close:async()=>{}};},
-  })}});
-  try{
-    const state=async()=>await (await fetch(new URL('/v1/state',host.url),{headers:{authorization:`Bearer ${registered.adminToken}`}})).json() as {records:Array<{label:string;level:string}>;display:{inputEnabled:boolean;pageId:string}};
-    const deadline=Date.now()+4000;
-    while(!(await state()).display.inputEnabled){if(Date.now()>deadline)throw new Error('Display did not become ready');await Bun.sleep(10);}
-    expect((await state()).display.pageId).toBe('build-workflow');
-    key!(12,'down');key!(12,'up');
-    let records:(Awaited<ReturnType<typeof state>>)['records']=[];
-    while(!records.some(record=>record.label==='프로젝트 검사 · 통과')){if(Date.now()>deadline)throw new Error('Command result signal missing');records=(await state()).records;await Bun.sleep(10);}
-    expect(records).toMatchObject([{label:'프로젝트 검사 · 통과',level:'info'}]);
-  }finally{await host.stop();rmSync(directory,{recursive:true,force:true});}
-},10000);
 async function fixture(){
   const directory=mkdtempSync(join(tmpdir(),'streamhub-command-'));
   const initial=registerCommandSource(config(),{...registration,cwd:directory});

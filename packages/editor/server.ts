@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import {dirname,join} from 'node:path';
 import {readFileSync,writeFileSync} from 'node:fs';
 import { readConfig, updateConfig, validateConfig, type Config } from '../host/src/config';
-import { type PageConfig } from '../streamdeck/pages';
+import {studioDocumentToPageConfig} from '../streamdeck/pages';
 import { SimulatorSession } from './simulator';
 import { checkDraft } from '../simulator/draft-check';
 import { validateSimulatorBoard } from './simulator';
@@ -24,15 +24,6 @@ const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','s
 const version = (config: Config) => createHash('sha256').update(JSON.stringify(config)).digest('hex');
 const modes=new Set<DisplayMode>(['off','hid','plugin']);
 const displayStatus=(config:Config,runtime?:Partial<StudioDisplayStatus>):StudioDisplayStatus=>{const active=modes.has(runtime?.activeMode as DisplayMode)?runtime!.activeMode!:'off',state=['off','connecting','ready','recovering','unavailable'].includes(runtime?.state as string)?runtime!.state!:'unavailable';return{configuredMode:config.display.mode,activeMode:active,state,restartRequired:config.display.mode!==active,...(typeof runtime?.message==='string'&&runtime.message?{message:runtime.message}:!runtime?{message:'Runtime이 실행 중이 아닙니다.'}:{})};};
-function boardOf(config: Config): PageConfig {
-  return config.streamdeck?.board ?? {
-    defaultPage: 'home', transition: 'fade', durationMs: 250,
-    pages: [
-      { id: 'home', title: 'Home', signals: {}, buttons: [{index: 12, type: 'page', pageId: 'terminal', label: 'Terminal'}, {index: 13, type: 'auto', label: 'Auto'}] },
-      { id: 'terminal', title: 'Terminal', match: {appBundleId: 'com.apple.Terminal'}, signals: Object.keys(config.sources).length ? {source: Object.keys(config.sources)[0]} : {}, buttons: [{index: 13, type: 'auto', label: 'Auto'}, {index: 12, type: 'page', pageId: 'home', label: 'Home'}] },
-    ],
-  };
-}
 class Conflict extends Error {}
 type Client = {session?: SimulatorSession};
 
@@ -73,7 +64,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
       }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
-        try { const config = readConfig(),snapshot=repository.snapshot();const display=await runtimeDisplay(config);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config),configVersion:version(config),snapshot,draft,display,runtimeStatus:display,geometry:streamDeckClassicGeometry}); }
+        try { const config = readConfig(),snapshot=repository.snapshot();const display=await runtimeDisplay(config);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token,sources:Object.keys(config.sources),actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})),configVersion:version(config),snapshot,draft,display,runtimeStatus:display,geometry:streamDeckClassicGeometry}); }
         catch { return json({error:'Could not read configuration'}, 500); }
       }
       const visualAsset=/^\/api\/assets\/([a-f0-9]{64})$/.exec(url.pathname);if(visualAsset&&request.method==='GET'){try{const bytes=await repository.assets.read(visualAsset[1]);return new Response(new Blob([new Uint8Array(bytes)]),{headers:{...headers,'Content-Type':'image/png'}});}catch{return json({error:'Not found'},404);}}
@@ -155,22 +146,6 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
             return json({...result as object,report:`/reports/${id}`});
           }catch{return json({error:'Draft check failed'},400);}finally{if(owned&&checking===owned)checking=undefined;}
         }
-        if (url.pathname === '/api/config' && request.method === 'POST') {
-          if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return json({error:'JSON required'},415);
-          try {
-            const raw = await request.text();
-            if (Buffer.byteLength(raw) > LIMIT) return json({error:'Request too large'},413);
-            const payload = JSON.parse(raw);
-            if (!payload || typeof payload !== 'object' || Array.isArray(payload) || typeof payload.version !== 'string' || !payload.board || Object.keys(payload).some(key => !['version','board'].includes(key))) return json({error:'Invalid configuration request'},400);
-            const saved = updateConfig(current => {
-              if (version(current) !== payload.version) throw new Conflict();
-              return validateConfig({...current, streamdeck: {...current.streamdeck, enabled: current.streamdeck?.enabled ?? false, board: payload.board}});
-            });
-            return json({board: boardOf(saved), version: version(saved)});
-          } catch (error) {
-            return error instanceof Conflict ? json({error:'Configuration changed. Reload before saving.'},409) : json({error:'Configuration could not be saved. Check the page settings.'},400);
-          }
-        }
         return json({error:'Not found'},404);
       }
       if (request.method !== 'GET') return json({error:'Not found'},404);
@@ -187,7 +162,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         clients.add(socket);
         try {
           const config = readConfig();
-          socket.data.session = new SimulatorSession(boardOf(config), Object.keys(config.sources), event => {
+          socket.data.session = new SimulatorSession(studioDocumentToPageConfig(repository.snapshot().document), Object.keys(config.sources), event => {
             if (socket.readyState === 1) socket.send(JSON.stringify(event));
           });
         } catch { socket.send(JSON.stringify({type:'error',message:'Could not start simulator'})); socket.close(1011); }

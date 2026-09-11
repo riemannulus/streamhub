@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { SignalStore } from '../packages/host/src/store';
-import { startDisplay } from '../packages/host/src/display';
+import {startLegacySimulationDisplay} from '../packages/simulator/legacy-display';
 import { openHidDisplay } from '../packages/streamdeck/hid';
 import type { ApplicationContext } from '../packages/host/src/app-context';
 
@@ -16,9 +16,9 @@ let context!:(context:ApplicationContext)=>void;
 const controller=new AbortController();
 process.once('SIGINT',()=>controller.abort());
 process.once('SIGTERM',()=>controller.abort());
-let display:Awaited<ReturnType<typeof startDisplay>>|undefined;
+let display:Awaited<ReturnType<typeof startLegacySimulationDisplay>>|undefined;
 try{
-  display=await startDisplay(store,'.streamhub',{
+  display=await startLegacySimulationDisplay(store,'.streamhub',{
     signal:controller.signal,
     board:{defaultPage:'home',transition:'fade',durationMs:250,pages:[
       {id:'home',title:'Home',signals:{source:'home'}},

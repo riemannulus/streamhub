@@ -7,7 +7,7 @@ import { startServer } from '../host/src/server';
 import { SignalStore } from '../host/src/store';
 import { ActionRegistry } from '../host/src/actions';
 import { parseLive } from '../host/src/validation';
-import { startDisplay } from '../host/src/display';
+import {startLegacySimulationDisplay} from './legacy-display';
 import type { SessionState } from '../host/src/session-monitor';
 import type { ApplicationContext } from '../host/src/app-context';
 import { HidDisplay } from '../streamdeck/hid';
@@ -61,7 +61,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   const adminToken=randomUUID()+randomUUID();
   const started=performance.now(),events:SimulationEvent[]=[];
   let signalStore:SignalStore|undefined;
-  let display:Awaited<ReturnType<typeof startDisplay>>|undefined;
+  let display:Awaited<ReturnType<typeof startLegacySimulationDisplay>>|undefined;
   let runtime:HostRuntime|undefined,generation=0,standby=true,pixels:(Buffer|null)[]=Array(15).fill(null);
   let session:SessionState={active:true,reason:'active'},context:ApplicationContext={appBundleId:null,available:true};
   let sessionCallback:((state:SessionState)=>void)|undefined,contextCallback:((context:ApplicationContext)=>void)|undefined;
@@ -76,9 +76,12 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   }
   function mockActions(){const definitions:Record<string,{exec:string[];args:Record<string,string>;sources:string[]}>=Object.create(null);for(const page of board.pages)for(const button of page.buttons??[])if(button.type==='action'){const names=Object.keys(button.args);definitions[button.name]={exec:['/usr/bin/true',...names.map(name=>`{${name}}`)],args:Object.fromEntries(names.map(name=>[name,'.*'])),sources:sourceNames};}return definitions;}
   async function boot(){
-    runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),display:{mode:'hid'},streamdeck:{enabled:true,board}},directory,{
-      dependencies:{openStore:path=>signalStore=new SignalStore(path),serve:options=>startServer({...options,port:0}),display:async(store,path,displayOptions)=>display=await startDisplay(store,path,{
-        ...displayOptions,pollMs,
+    runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),display:{mode:'off'}},directory,{
+      dependencies:{openStore:path=>signalStore=new SignalStore(path),serve:options=>startServer({...options,port:0})},
+    });
+    display=await startLegacySimulationDisplay(signalStore!,directory,{
+        board,pollMs,
+        signal:new AbortController().signal,
         execute:async(effect,signal)=>{const result=actionResult;emit({type:'effect',effect,status:'running'});await new Promise<void>((resolve,reject)=>{if(signal?.aborted){reject(new Error('Cancelled'));return;}const abort=()=>{clearTimeout(timer);reject(new Error('Cancelled'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},100);signal?.addEventListener('abort',abort,{once:true});});emit({type:'effect',effect,status:result,...(result==='error'?{message:'모의 실행 실패'}:{})});if(result==='error')throw new Error('모의 실행 실패');},
         monitor:async callback=>{sessionCallback=callback;callback({...session});return{stop:async()=>{if(sessionCallback===callback)sessionCallback=undefined;}};},
         context:async callback=>{contextCallback=callback;callback({...context});return{stop:async()=>{if(contextCallback===callback)contextCallback=undefined;}};},
@@ -97,8 +100,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
           });
           return {write:async(page,signal)=>{frame=structuredClone(page);emit({type:'write-begin',frame:structuredClone(page),aborted:signal.aborted});await hid.write(page,signal);emit({type:'write-end',frame:structuredClone(page),aborted:signal.aborted});},standby:()=>hid.standby(),close:()=>hid.close()};
         },
-      })},
-    });
+      });
   }
   function running(){if(stopped||!runtime||restarting)throw new Error('Simulator is not running');return runtime;}
   async function request<T>(path:string,token:string,method='GET',body?:unknown):Promise<T>{
@@ -110,7 +112,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   function snapshot():SimulationSnapshot{return{standby,pixels:pixels.map(bytes=>bytes?Buffer.from(bytes):null),generation,frame:frame?structuredClone(frame):null};}
   function stop():Promise<void>{
     if(stopping)return stopping;stopped=true;
-    stopping=(async()=>{try{await restarting;await runtime?.stop();}finally{await rm(directory,{recursive:true,force:true});}})();
+    stopping=(async()=>{try{await restarting;await display?.stop();await runtime?.stop();}finally{await rm(directory,{recursive:true,force:true});}})();
     return stopping;
   }
   try{await boot();}catch(error){await stop();throw error;}
@@ -139,13 +141,13 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
       for(const record of current.records)if(!seen.has(JSON.stringify([record.source,record.id])))await remove(record.id,undefined,record.source);
       for(const record of prepared)await upsert(record.signal,undefined,record.source);
     },
-    state:()=>request('/v1/state',adminToken),
+    async state(){const value=await request<Omit<SimulationState,'display'> & {display?:unknown}>('/v1/state',adminToken);return{...value,display:display!.status()} as SimulationState;},
     key(index,edge){running();if(!Number.isInteger(index)||index<0||index>14||(edge!=='down'&&edge!=='up'))throw new Error('Invalid key event');emit({type:'input',index,edge});keyCallback?.(index,edge);},
     setSession(active){running();session={active,reason:active?'active':'locked'};emit({type:'session',active});sessionCallback?.({...session});},
     setContext(appBundleId,available=true,details={}){running();context={appBundleId,available,...details};emit({type:'context',...context});contextCallback?.({...context});},
     restart(){
       if(restarting)return restarting;running();
-      restarting=(async()=>{await runtime!.stop();emit({type:'restart'});if(!stopped)await boot();})().finally(()=>{restarting=undefined;});return restarting;
+      restarting=(async()=>{await display!.stop();display=undefined;await runtime!.stop();emit({type:'restart'});if(!stopped)await boot();})().finally(()=>{restarting=undefined;});return restarting;
     },stop,
   };
 }

@@ -48,7 +48,7 @@ CLI가 설정의 토큰을 읽어 요청합니다. 재시도는 같은 delivery 
 
 ## 첫 업무 신호: 로컬 명령 검사
 
-프로젝트 검사 명령을 `build` 소스와 `build-workflow` 페이지로 등록할 수 있습니다. 기본 명령은 `bun run check`이며, `--` 뒤에 argv를 지정하면 셸 없이 그 명령을 실행합니다.
+프로젝트 검사 명령을 `build` 소스와 `run-checks` 동작으로 등록할 수 있습니다. 기본 명령은 `bun run check`이며, `--` 뒤에 argv를 지정하면 셸 없이 그 명령을 실행합니다.
 
 ```sh
 bun run source:register
@@ -58,9 +58,9 @@ bun run source:register -- bun test
 bun start
 ```
 
-기존 페이지 구성이 있으면 기본 페이지의 마지막 빈 콘텐츠 키에 **검사** 이동 버튼을 추가합니다. 키나 소스·액션·페이지 이름이 충돌하면 기존 설정을 덮어쓰지 않고 등록을 거부합니다. 등록은 Stream Deck 활성화 여부와 기존 토큰을 보존하므로, 필요하면 별도로 `bun run streamdeck:register`를 실행합니다.
+등록은 장치 화면을 수정하지 않고 소스·토큰·명령만 추가합니다. Studio의 **등록된 명령**에서 `run-checks`를 골라 원하는 페이지와 키에 아이콘·라벨을 함께 배치합니다. 기존 명령과 충돌하면 설정을 덮어쓰지 않고 등록을 거부합니다.
 
-호스트가 실행된 뒤 `build-workflow` 페이지에서 **검사 실행** 키를 누르면 실행 중에는 warn, 성공하면 info, 실패·취소하면 urgent 신호가 남습니다. 같은 게시 경로를 장치 없이 확인할 수도 있습니다.
+호스트가 실행된 뒤 Studio에서 만든 버튼을 누르면 실행 중에는 warn, 성공하면 info, 실패·취소하면 urgent 신호가 남습니다. 같은 게시 경로를 장치 없이 확인할 수도 있습니다.
 
 ```sh
 bun run source:run
@@ -142,18 +142,24 @@ Bun 1.4.0에서 실제 **Stream Deck MK.2 / 펌웨어 1.02.000**을 열고 15개
 실기기에서 사용자가 패턴의 정상 표시를 확인했고, 01번과 15번 키의 down/up도 수신했습니다. [실기기 검증 기록](docs/design/hid-validation.md)을 참고하세요.
 
 
-## 자동 대기화면과 세션 보드
+## Stream Deck 연결 모드와 대기 화면
 
-최초 한 번 스트림덱 출력을 등록한 뒤 실행합니다.
+Studio 헤더의 장치 상태를 눌러 연결 모드를 선택합니다. 선택은 설정에 저장되고 현재 Runtime의 장치 소유권은 바꾸지 않으므로 Runtime을 다시 시작해야 합니다.
 
 ```sh
+# HID: Stream Deck 앱을 완전히 종료한 뒤
 bun run streamdeck:register
+bun start
+
+# Plugin: Stream Deck 앱을 실행한 상태에서
+bun run streamdeck:setup
+bun run streamdeck:plugin:build
 bun start
 ```
 
-등록 명령은 설정이 없으면 생성하고 `streamdeck.enabled`를 켭니다. 기존 토큰과 다른 설정은 보존하며, 여러 번 실행해도 됩니다. `STREAMHUB_CONFIG`를 지정했다면 그 설정 파일에 적용합니다. 이후에는 `bun start`만 실행하면 됩니다. 이미 실행 중인 호스트에는 재시작 후 반영됩니다. 등록 자체는 설정만 저장하며 실제 장치 연결은 시작할 때 수행합니다.
+두 등록 명령은 각각 canonical `display.mode`만 선택하며 기존 토큰과 다른 설정을 보존합니다. `STREAMHUB_CONFIG`를 지정했다면 그 설정 파일에 적용합니다. 모드 변경은 재시작 전에는 적용되지 않으며, 선택한 모드가 실패해도 다른 모드로 자동 전환하지 않습니다.
 
-설정이 없거나 false이면 기존 HTTP 전용 실행을 유지합니다. 활성화하면 호스트가 100ms마다 최신 신호를 확인하고 바뀐 화면만 요청합니다. 연결된 장치는 15키·72×72 한 대여야 합니다. Elgato 앱과 동시에 이미지를 쓰면 화면이 경쟁하므로 직접 HID 사용 중에는 해당 앱을 종료합니다.
+`off` 모드는 HTTP와 데이터 수집만 실행합니다. HID 모드는 15키·72×72 장치 한 대를 직접 소유하므로 Elgato 앱을 종료해야 합니다. Plugin 모드는 Elgato 앱과 프로필을 사용하며 SDK 전달 지연 때문에 HID보다 잠금 복구와 애니메이션이 느릴 수 있습니다.
 
 | 상황 | 처리 |
 |---|---|
@@ -179,13 +185,13 @@ bun run hid:lifecycle-check --session # 실제 macOS 잠금/해제를 5분 관�
 
 [디스플레이 수명 관리 설계](docs/design/display-lifecycle-plan.md).
 
-## 페이지 구성과 페이드 전환
+## 레거시 페이지 시뮬레이터
 
-샘플 페이지를 등록한 뒤 호스트를 시작합니다. 이미 실행 중이면 먼저 Ctrl-C로 종료하세요.
+아래 `PageConfig` 설명은 자동 검증 시나리오와 `hid:pages-check` 진단에만 남아 있습니다. 실제 Runtime의 페이지·버튼·배경·대기 화면은 Studio 문서에서만 관리합니다.
 
 ```sh
-bun run streamdeck:register --pages examples/pages.json
-bun start
+bun run simulator:check
+bun run hid:pages-check
 ```
 
 샘플은 홈과 터미널 페이지입니다. 다른 터미널에서 `bun run client push demo examples/session.json`으로 신호를 보내면 표시됩니다. 물리 키는 아래처럼 0부터 번호를 매깁니다.
@@ -210,7 +216,7 @@ bun start
 
 상태 확인 주기 100ms는 HID 프레임 속도가 아닙니다. 페이드는 목표 이미지를 준비한 뒤 시간 기준으로 재생하며, 늦은 중간 프레임을 건너뛰고 마지막 화면을 정확히 전송합니다. 실제 시간에는 HID 전송 시간이 더해질 수 있습니다. 전환 중에는 버튼 실행을 차단하며 잠금·종료 시에는 페이드를 중단하고 대기화면으로 복귀합니다.
 
-페이지별 목록·영역 배치와 수동 고정 상태는 저장됩니다. 설정 변경은 재등록 후 호스트 재시작으로 반영합니다. `streamdeck.board`가 없는 기존 설정은 기존 홈 보드를 그대로 사용합니다. 고정 페이지 버튼의 외부 동작만 실행하며 신호 입력은 임의 명령을 정의할 수 없습니다.
+이 형식은 Runtime 설정에 저장되지 않습니다. 실제 장치의 고정 버튼은 Studio에서 구성하며 신호 입력은 임의 명령을 정의할 수 없습니다.
 
 장치 전환만 확인하려면 호스트와 Elgato 앱을 종료하고 Mac 잠금을 해제한 뒤 `bun run hid:pages-check`를 실행합니다. 임시 HOME/WORK 신호와 모의 앱 문맥으로 자동 전환을 반복하고, 종료할 때 대기화면으로 복귀합니다. 실제 앱 감지 확인은 위 샘플을 등록한 호스트에서 앱을 전환해 수행하세요. 진단 결과는 `.streamhub/hid-pages-check.json`에 저장됩니다.
 
