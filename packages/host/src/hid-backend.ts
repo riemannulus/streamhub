@@ -31,13 +31,13 @@ export async function startHidBackend(options:{events:DeckBackendEvents;connect?
       const device:DisplayDevice<HidPresentation>={write:(work,signal)=>display.write(work,signal),standby:()=>display.standby(),close:async()=>{connected=false;await display.close();}};
       return device;
     }catch(error){report(error);throw error;}
-  },{identity:work=>work.identity,releaseAfter:work=>work.releaseAfter===true,onError:report});
+  },{identity:work=>work.identity,onError:report});
   await lifecycle.setAllowed(true);
   const backend:DeckBackend={
     async prepare(request){
       if(closed)throw new Error('HID backend is stopped');
       const [to,from]=await Promise.all([rgb(request.to),request.from?rgb(request.from):Promise.resolve(undefined)]),token=randomUUID().replaceAll('-','');
-      currentToken=token;current={request,work:{identity:request.to.identity,generation:request.generation,to,transition:request.transition,...(from?{from}:{}),...(request.reason==='standby'?{releaseAfter:true}:{})}};
+      currentToken=token;current={request,work:{identity:request.to.identity,generation:request.generation,to,transition:request.transition,...(from?{from}:{})}};
       return{backend:'hid',generation:request.generation,token};
     },
     async present(prepared:PreparedPresentation){
@@ -46,8 +46,7 @@ export async function startHidBackend(options:{events:DeckBackendEvents;connect?
       const stored=current;current=undefined;currentToken=undefined;state=stored.request.reason==='unlock'||stored.request.reason==='reconnect'?'recovering':'connecting';
       await lifecycle.setAllowed(true);await lifecycle.present(stored.work);
       if(message)return;
-      activeGeneration=stored.request.generation;
-      if(stored.work.releaseAfter){connected=false;state='connecting';return;}
+      activeGeneration=stored.request.inputEnabled?stored.request.generation:undefined;
       state='ready';
     },
     status():DeckBackendStatus{return{mode:'hid',state,connected,...(message?{message}:{})};},
