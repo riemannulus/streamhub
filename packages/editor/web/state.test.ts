@@ -69,3 +69,11 @@ test('stored browser fetch keeps the global receiver for later icon requests',as
   const state=await StudioState.connect(request as typeof fetch);
   expect((await state.iconPacks())[0]?.name).toBe('Media');
 });
+
+test('display mode save updates device state without saving or dirtying the document',async()=>{
+  const calls:{url:string;init?:RequestInit}[]=[],document=defaultStudioDocument(),display={configuredMode:'plugin' as const,activeMode:'plugin' as const,state:'ready' as const,restartRequired:false};
+  const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);calls.push({url,init});if(url==='/api/bootstrap')return Response.json({token:'t',snapshot:{document,version:'doc-v1'},configVersion:'config-v1',display,runtimeStatus:display,geometry:{x:[11,108,205,302,399],y:[5,102,199]}});if(url.includes('/catalog/'))return Response.json([]);if(url==='/api/display-mode')return Response.json({configVersion:'config-v2',display:{configuredMode:'hid',activeMode:'plugin',state:'ready',restartRequired:true}});return Response.json({error:'Not found'},{status:404});};
+  const state=await StudioState.connect(request as typeof fetch);await state.setDisplayMode('hid');
+  expect(state.display).toEqual({configuredMode:'hid',activeMode:'plugin',state:'ready',restartRequired:true});expect(state.model.dirty).toBe(false);expect(calls.filter(call=>call.url==='/api/draft')).toHaveLength(0);
+  expect(calls.find(call=>call.url==='/api/display-mode')?.init?.body).toBe(JSON.stringify({mode:'hid',expectedVersion:'config-v1'}));
+});

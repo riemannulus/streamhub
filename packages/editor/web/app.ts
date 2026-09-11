@@ -7,13 +7,14 @@ import {renderPages} from './pages-view';
 import {StudioState} from './state';
 import {shortcutFor} from './clipboard';
 import {chooseIconFromLibrary} from './icon-library';
+import {openDisplaySettings} from './display-settings';
 
 const $=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(id) as T;
 const input=(id:string)=>$<HTMLInputElement>(id),select=(id:string)=>$<HTMLSelectElement>(id);
 let studio:StudioState,standby=false,query='',dragSource:{pageId:string;index:number}|undefined;
 const currentPage=()=>studio.model.document.pages.find(page=>page.id===studio.model.selectedPageId)!;
 const showError=(message='')=>{const node=$('error');node.hidden=!message;node.textContent=message;if(message)setTimeout(()=>{if(node.textContent===message)node.hidden=true;},6000);};
-const runtimeText=()=>studio.runtimeStatus?.connected?'Stream Deck 연결됨':studio.runtimeStatus?.message??'Runtime 오프라인';
+const runtimeText=()=>{const mode={hid:'직접 연결',plugin:'플러그인',off:'사용 안 함'}[studio.display.configuredMode];if(studio.display.restartRequired)return `${mode} · 재시작 필요`;if(studio.display.state==='ready')return `${mode} · 연결됨`;if(studio.display.state==='connecting')return `${mode} · 연결 중`;if(studio.display.state==='recovering')return `${mode} · 복구 중`;return `${mode} · ${studio.display.state==='off'?'꺼짐':'사용 불가'}`;};
 
 function changed(){studio.changed();render();}
 async function chooseAction(type:ActionType,index=studio.model.selectedKey){
@@ -32,7 +33,7 @@ function renderSurfaceTools(){
   $('page-settings').hidden=standby;input('page-name').value=currentPage().title;$<HTMLInputElement>('default-page').checked=studio.model.document.defaultPageId===studio.model.selectedPageId;
 }
 function render(){
-  $('runtime').textContent=runtimeText();$('runtime-dot').classList.toggle('offline',!studio.runtimeStatus?.connected);$('state').textContent=studio.model.dirty?'적용하지 않은 변경':'장치와 동일';$('state').classList.toggle('dirty',studio.model.dirty);$<HTMLButtonElement>('apply').disabled=!studio.model.dirty;
+  $('runtime').textContent=runtimeText();$('runtime-dot').classList.toggle('offline',!['ready','recovering'].includes(studio.display.state));$('state').textContent=studio.model.dirty?'적용하지 않은 변경':'장치와 동일';$('state').classList.toggle('dirty',studio.model.dirty);$<HTMLButtonElement>('apply').disabled=!studio.model.dirty;
   renderPages($('pages'),studio.model,{standby,select:pageId=>{standby=false;studio.model.selectPage(pageId);render();},selectStandby:()=>{standby=true;render();},changed,error:showError});
   renderActionLibrary($('actions'),query,chooseAction);$('action-pane').classList.toggle('disabled',standby);
   renderCanvas($('canvas'),studio.model,studio.geometry,{standby,select:index=>{studio.model.selectKey(index);render();},drop:(type,index)=>chooseAction(type,index),moveStart:index=>{dragSource={pageId:studio.model.selectedPageId,index};},moveDrop:index=>{if(!dragSource)return;try{const occupied=currentPage().buttons?.some(button=>button.index===index),swap=!!occupied&&confirm('두 버튼의 위치를 서로 바꿀까요?');if(occupied&&!swap)return;const moved=studio.model.moveButton(dragSource,{pageId:studio.model.selectedPageId,index},swap);dragSource=undefined;if(moved)changed();else render();}catch(error){showError(String(error));}}});
@@ -45,6 +46,7 @@ input('action-search').oninput=()=>{query=input('action-search').value;render();
 $('add-page').onclick=()=>{try{standby=false;studio.model.addPage();changed();}catch(error){showError(String(error));}};
 $('undo').onclick=()=>{if(studio.model.undo())changed();else render();};$('redo').onclick=()=>{if(studio.model.redo())changed();else render();};
 $('apply').onclick=async()=>{try{await studio.apply();render();}catch(error){showError(error instanceof Error?error.message:String(error));}};
+$('device-settings').onclick=()=>openDisplaySettings(studio,{changed:render,error:showError});
 input('page-name').onchange=()=>{try{studio.model.renamePage(studio.model.selectedPageId,input('page-name').value);changed();}catch(error){showError(String(error));}};
 input('default-page').onchange=()=>{if(input('default-page').checked){studio.model.setDefaultPage(studio.model.selectedPageId);changed();}};
 input('surface-color').onchange=()=>{studio.model.setSurfaceColor(standby?'standby':'page',input('surface-color').value);changed();};

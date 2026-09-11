@@ -16,10 +16,14 @@ import {actionCatalog} from '../host/src/key-actions';
 import {AppCatalog,MacAppIconProvider,normalizeAppCatalog,normalizePickerResult,pickNativePath,type AppIconProvider,type PathPickerResult} from '../host/src/catalog';
 import {IconPackCatalog} from './icon-packs';
 import {normalizeVisualAsset} from '../studio/assets';
+import type {DisplayMode} from '../host/src/config';
+import type {StudioDisplayStatus} from '../host/src/runtime';
 
 const LIMIT = 9 * 1024 * 1024;
-const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css'],['/icon-library.css','icon-library.css']]);
+const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css'],['/icon-library.css','icon-library.css'],['/display-settings.css','display-settings.css']]);
 const version = (config: Config) => createHash('sha256').update(JSON.stringify(config)).digest('hex');
+const modes=new Set<DisplayMode>(['off','hid','plugin']);
+const displayStatus=(config:Config,runtime?:Partial<StudioDisplayStatus>):StudioDisplayStatus=>{const active=modes.has(runtime?.activeMode as DisplayMode)?runtime!.activeMode!:'off',state=['off','connecting','ready','recovering','unavailable'].includes(runtime?.state as string)?runtime!.state!:'unavailable';return{configuredMode:config.display.mode,activeMode:active,state,restartRequired:config.display.mode!==active,...(typeof runtime?.message==='string'&&runtime.message?{message:runtime.message}:!runtime?{message:'Runtime이 실행 중이 아닙니다.'}:{})};};
 function boardOf(config: Config): PageConfig {
   return config.streamdeck?.board ?? {
     defaultPage: 'home', transition: 'fade', durationMs: 250,
@@ -53,6 +57,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
     'Referrer-Policy': 'no-referrer',
   };
   const json = (value: unknown, status = 200) => Response.json(value, {status, headers});
+  const runtimeDisplay=async(config:Config):Promise<StudioDisplayStatus>=>{try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/state`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as {display?:Partial<StudioDisplayStatus>};return displayStatus(config,live.display);}}catch{}return displayStatus(config);};
   const server = Bun.serve<Client>({
     hostname: '127.0.0.1', port: options.port ?? 31416, maxRequestBodySize: LIMIT,
     async fetch(request, server) {
@@ -68,7 +73,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
       }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
-        try { const config = readConfig(),snapshot=repository.snapshot();let runtimeStatus:unknown={connected:false,message:'Runtime이 실행 중이 아닙니다.'};try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;runtimeStatus=live.runtimeStatus;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config),snapshot,draft,runtimeStatus,geometry:streamDeckClassicGeometry}); }
+        try { const config = readConfig(),snapshot=repository.snapshot();const display=await runtimeDisplay(config);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token, board: boardOf(config), sources: Object.keys(config.sources), actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})), version: version(config),configVersion:version(config),snapshot,draft,display,runtimeStatus:display,geometry:streamDeckClassicGeometry}); }
         catch { return json({error:'Could not read configuration'}, 500); }
       }
       const visualAsset=/^\/api\/assets\/([a-f0-9]{64})$/.exec(url.pathname);if(visualAsset&&request.method==='GET'){try{const bytes=await repository.assets.read(visualAsset[1]);return new Response(new Blob([new Uint8Array(bytes)]),{headers:{...headers,'Content-Type':'image/png'}});}catch{return json({error:'Not found'},404);}}
@@ -80,6 +85,10 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
       }
       if (url.pathname.startsWith('/api/')) {
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
+        if(url.pathname==='/api/display-mode'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          try{const payload=await request.json() as Record<string,unknown>;if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).length!==2||!modes.has(payload.mode as DisplayMode)||typeof payload.expectedVersion!=='string')return json({error:'Invalid display mode request'},400);const saved=updateConfig(current=>{if(version(current)!==payload.expectedVersion)throw new Conflict();return{...current,display:{...current.display,mode:payload.mode as DisplayMode}};});const display=await runtimeDisplay(saved);return json({configVersion:version(saved),display});}catch(error){return error instanceof Conflict?json({error:'설정이 다른 곳에서 변경되었습니다. 다시 불러오세요.'},409):json({error:'디스플레이 모드를 저장하지 못했습니다.'},400);}
+        }
         if(url.pathname==='/api/catalog/apps'&&request.method==='GET'){
           try{return json(normalizeAppCatalog(await appCatalog.apps()));}catch{return json({error:'앱 목록을 불러오지 못했습니다.'},500);}
         }

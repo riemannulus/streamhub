@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Streamhub Studio</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/icon-library.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Streamhub Studio</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/icon-library.css"><link rel="stylesheet" href="/display-settings.css"></head>
 <body>
   <header>
     <div class="brand"><span class="brand-mark">S</span><strong>Streamhub</strong><b>Studio</b></div>
     <div class="workspace">작업 공간 <small>Stream Deck 5×3</small></div>
-    <div class="header-spacer"></div><div class="runtime"><i id="runtime-dot"></i><span id="runtime">Runtime 확인 중</span></div><span id="state">불러오는 중</span>
+    <div class="header-spacer"></div><button id="device-settings" class="runtime" type="button" title="Stream Deck 연결 방식 설정"><i id="runtime-dot"></i><span id="runtime">Runtime 확인 중</span><b>⌄</b></button><span id="state">불러오는 중</span>
     <button id="undo" class="header-button" title="실행 취소">↶</button><button id="redo" class="header-button" title="다시 실행">↷</button><button id="apply" class="primary" disabled>장치에 적용</button>
   </header>
   <div id="error" role="alert" hidden></div>

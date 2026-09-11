@@ -72,7 +72,7 @@ test('save requires capability and JSON, validates boards, detects conflicts and
   expect((await save(url,bootstrap.token,{...body,version:'old'})).status).toBe(409);
   expect((await save(url,bootstrap.token,body,{Origin:url})).status).toBe(200);
   const config = JSON.parse(readFileSync(process.env.STREAMHUB_CONFIG!, 'utf8'));
-  expect(config).toEqual({...baseConfig(),streamdeck:{enabled:false,board:bootstrap.board}});
+  expect(config).toEqual({...baseConfig(),display:{mode:'off'},streamdeck:{enabled:false,board:bootstrap.board}});
   expect((await save(url,bootstrap.token,body)).status).toBe(409);
 });
 
@@ -100,7 +100,7 @@ test('saving preserves enabled devices and refuses external configuration edits'
   expect((await save(url,bootstrap.token,{board:bootstrap.board,version:bootstrap.version})).status).toBe(409);
   const current = await (await fetch(`${url}/api/bootstrap`)).json() as any;
   expect((await save(url,current.token,{board:current.board,version:current.version})).status).toBe(200);
-  expect(JSON.parse(readFileSync(file,'utf8'))).toEqual({...external,streamdeck:{enabled:true,board:current.board}});
+  expect(JSON.parse(readFileSync(file,'utf8'))).toEqual({...external,display:{mode:'hid'},streamdeck:{enabled:true,board:current.board}});
 });
 
  test('default board keeps list pagination accessible on every outer page',async () => {
@@ -180,4 +180,20 @@ test('icon pack APIs search, preview and import an installed icon without exposi
   const preview=await fetch(`${url}/api/icon-packs/${packs[0].id}/icons/${icons[0].id}/preview`,{headers});expect(preview.status).toBe(200);expect(preview.headers.get('Content-Type')).toBe('image/png');expect(await sharp(await preview.arrayBuffer()).metadata()).toMatchObject({width:144,height:144});
   const imported=await fetch(`${url}/api/icon-packs/import`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({packId:packs[0].id,iconId:icons[0].id})});expect(imported.status).toBe(200);const {assetId}=await imported.json() as {assetId:string};expect((await fetch(`${url}/api/assets/${assetId}`)).status).toBe(200);
   expect((await fetch(`${url}/api/icon-packs/import`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({packId:'../bad',iconId:icons[0].id})})).status).toBe(400);
+});
+
+test('display mode save is authenticated, versioned, sanitized, and restart gated',async()=>{
+  const plugin={port:31417,tokenFile:'/private/plugin-token'},config={...baseConfig(),display:{mode:'plugin' as const,plugin},streamdeckPlugin:{enabled:true,...plugin}};
+  const {url,bootstrap}=await setup({},config);
+  expect(bootstrap.display).toMatchObject({configuredMode:'plugin',activeMode:'off',state:'unavailable',restartRequired:true});
+  expect(JSON.stringify(bootstrap.display)).not.toContain('tokenFile');
+  const endpoint=`${url}/api/display-mode`,body={mode:'hid',expectedVersion:bootstrap.configVersion};
+  expect((await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).status).toBe(403);
+  expect((await fetch(endpoint,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'text/plain'},body:JSON.stringify(body)})).status).toBe(415);
+  expect((await fetch(endpoint,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({...body,mode:'automatic'})})).status).toBe(400);
+  expect((await fetch(endpoint,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({...body,expectedVersion:'stale'})})).status).toBe(409);
+  const response=await fetch(endpoint,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify(body)});expect(response.status).toBe(200);const saved=await response.json() as any;
+  expect(saved.display).toEqual({configuredMode:'hid',activeMode:'off',state:'unavailable',restartRequired:true,message:'Runtime이 실행 중이 아닙니다.'});
+  expect(JSON.stringify(saved)).not.toContain('tokenFile');
+  expect(JSON.parse(readFileSync(process.env.STREAMHUB_CONFIG!,'utf8')).display).toEqual({mode:'hid',plugin});
 });
