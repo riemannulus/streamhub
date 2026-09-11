@@ -1,6 +1,9 @@
-import { mkdirSync, copyFileSync } from 'node:fs';
-const result=await Bun.build({entrypoints:['packages/host/src/main.ts'],outdir:'dist/packages/host/src',target:'bun',packages:'external'});
-if(!result.success){console.error(result.logs);process.exit(1);}
-mkdirSync('dist/packages/host/native',{recursive:true});
-copyFileSync('packages/host/native/session-monitor.swift','dist/packages/host/native/session-monitor.swift');
-console.log('Built dist/packages/host/src/main.js with native monitor source. Runtime dependencies remain in node_modules.');
+import {existsSync,mkdirSync,rmSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {buildPreviewApplications} from './package';
+
+const repositoryRoot=resolve('.'),packageRoot=resolve('dist/build');
+if(existsSync(packageRoot))rmSync(packageRoot,{recursive:true});
+mkdirSync(packageRoot,{recursive:true});
+await buildPreviewApplications({repositoryRoot,packageRoot});
+console.log(`Built Runtime, CLI, installer, and Studio assets in ${packageRoot}`);
