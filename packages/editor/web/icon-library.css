@@ -27,7 +27,27 @@
 .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); align-content: start; gap: 7px; overflow: auto; padding: 2px; }
 .icon-grid > button { min-width: 0; padding: 8px 5px; border-color: transparent; background: transparent; }
 .icon-grid > button:hover { background: #182532; border-color: #47627e; }
-.icon-grid > button > span { position: relative; width: 72px; height: 72px; display: grid; place-items: center; margin: auto; border-radius: 8px; background: #05080b; }
+.icon-grid > button > span {
+  --icon-preview-light: #dfe5eb;
+  --icon-preview-dark: #55616e;
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  margin: auto;
+  overflow: hidden;
+  border: 1px solid #7f8a95;
+  border-radius: 8px;
+  background-color: var(--icon-preview-light);
+  background-image:
+    linear-gradient(45deg, var(--icon-preview-dark) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--icon-preview-dark) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--icon-preview-dark) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--icon-preview-dark) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
 .icon-grid img { width: 72px; height: 72px; object-fit: contain; }
 .icon-grid b { display: block; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .icon-grid i { position: absolute; right: 2px; bottom: 2px; padding: 2px 3px; border-radius: 3px; background: #202a35e8; color: #e9bd69; font-size: 7px; font-style: normal; }

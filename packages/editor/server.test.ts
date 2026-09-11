@@ -56,6 +56,7 @@ test('bootstrap is credential-free and cannot be read through foreign hosts or o
   const page = await fetch(url);
   expect(page.status).toBe(200);
   expect(page.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");
+  expect(page.headers.get('Content-Security-Policy')).toContain("img-src 'self' data: blob:");
   expect(page.headers.get('Cache-Control')).toBe('no-store');
 });
 

@@ -1,4 +1,6 @@
 import {expect,test} from 'bun:test';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {IconLibraryModel} from './icon-library';
 
 const pack=(id:string,name:string)=>({id,name,version:'1.0.0',author:'Author',iconCount:1,hasLicense:false});
@@ -14,4 +16,12 @@ test('ignores a stale search response that finishes after a newer query',async()
   const model=new IconLibraryModel(source),opening=model.open();await Bun.sleep(0);resolvers.get('')?.([icon('all','All')]);await opening;
   const old=model.search('old'),latest=model.search('latest');await Bun.sleep(0);resolvers.get('latest')?.([icon('latest','Latest')]);await latest;resolvers.get('old')?.([icon('old','Old')]);await old;
   expect(model.icons.map(item=>item.name)).toEqual(['Latest']);
+});
+
+test('preview tiles provide light and dark contrast for transparent icons',()=>{
+  const css=readFileSync(join(import.meta.dir,'icon-library.css'),'utf8');
+  const rule=/\.icon-grid\s*>\s*button\s*>\s*span\s*\{([^}]+)\}/.exec(css)?.[1]??'';
+  expect(rule).toContain('--icon-preview-light');
+  expect(rule).toContain('--icon-preview-dark');
+  expect(rule).toContain('linear-gradient');
 });
