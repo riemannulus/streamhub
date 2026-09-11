@@ -82,9 +82,9 @@ export class HidDisplay {
     const send=async(buffers:readonly Buffer[])=>{for(let index=0;index<15;index++){if(canceled())return;await this.hardware.fillKeyBuffer(index,buffers[index]!,{format:'rgb'});this.sent[index]=Buffer.from(buffers[index]!);}if(!canceled())this.identity=frame.identity;};
     const animate=frame.transition.type!=='none'&&frame.transition.durationMs>0&&this.identity!==frame.identity&&from?.length===15;
     if(animate){
-      const duration=frame.transition.durationMs;if(!Number.isFinite(duration)||duration>500)throw new Error('Invalid transition duration');const now=this.playback.now??(()=>performance.now()),started=now();
-      for(let step=1;step<5;step++){
-        const deadline=duration*step/5;if(now()-started>deadline)continue;await(this.playback.wait??wait)(Math.max(0,deadline-(now()-started)),signal);if(canceled())return;const progress=Math.min(1,(now()-started)/duration);if(progress>=1)break;
+      const duration=frame.transition.durationMs;if(!Number.isFinite(duration)||duration>500)throw new Error('Invalid transition duration');const now=this.playback.now??(()=>performance.now()),started=now(),frameCount=Math.min(15,Math.max(2,Math.ceil(duration/34)));
+      for(let step=1;step<frameCount;step++){
+        const deadline=duration*step/frameCount;if(now()-started>deadline)continue;await(this.playback.wait??wait)(Math.max(0,deadline-(now()-started)),signal);if(canceled())return;const progress=Math.min(1,(now()-started)/duration);if(progress>=1)break;
         const buffers=from!.map((source,index)=>{const destination=target[index]!;return Buffer.from(source.map((value,pixel)=>{if(frame.transition.type==='crossfade')return Math.round(value+(destination[pixel]!-value)*progress);if(progress<.5)return Math.round(value*(1-progress*2));return Math.round(destination[pixel]!*((progress-.5)*2));}));});
         await send(buffers);if(canceled())return;
       }

@@ -76,6 +76,15 @@ test('canceling during a timed wait returns promptly without sending another key
 
 test('prepared RGB presentations keep crossfade and fade-through-black distinct',async()=>{
   const play=async(type:HidPresentation['transition']['type'])=>{let time=0;const values:number[]=[];const display=new HidDisplay({fillKeyBuffer:async(index,bytes)=>{if(index===0)values.push(bytes[0]!);},resetToLogo:async()=>{},close:async()=>{}},()=>{},{now:()=>time,wait:async milliseconds=>{time+=milliseconds;}});await display.write({identity:`${type}-target`,generation:'g1',from:Array.from({length:15},()=>Buffer.alloc(72*72*3,100)),to:Array.from({length:15},()=>Buffer.alloc(72*72*3,200)),transition:{type,durationMs:250}},new AbortController().signal);return values;};
-  expect(await play('crossfade')).toEqual([120,140,160,180,200]);
-  expect(await play('fade-through-black')).toEqual([60,20,40,120,200]);
+  const crossfade=await play('crossfade'),throughBlack=await play('fade-through-black');
+  expect(crossfade.at(-1)).toBe(200);expect(throughBlack.at(-1)).toBe(200);
+  expect(crossfade.every((value,index)=>index===0||value>crossfade[index-1]!)).toBe(true);
+  expect(Math.min(...throughBlack)).toBeLessThan(Math.min(...crossfade));
+});
+
+test('prepared HID animation targets thirty frames per second and ends exact',async()=>{
+  let time=0;const values:number[]=[];
+  const display=new HidDisplay({fillKeyBuffer:async(index,bytes)=>{if(index===0)values.push(bytes[0]!);},resetToLogo:async()=>{},close:async()=>{}},()=>{},{now:()=>time,wait:async milliseconds=>{time+=milliseconds;}});
+  await display.write({identity:'target',generation:'g1',from:Array.from({length:15},()=>Buffer.alloc(72*72*3,100)),to:Array.from({length:15},()=>Buffer.alloc(72*72*3,200)),transition:{type:'crossfade',durationMs:320}},new AbortController().signal);
+  expect(values).toEqual([110,120,130,140,150,160,170,180,190,200]);
 });
