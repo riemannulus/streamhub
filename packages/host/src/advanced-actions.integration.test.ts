@@ -4,8 +4,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {ButtonDefinition,StudioDocument} from '../../studio/document';
 import type {ButtonEffect} from '../../streamdeck';
+import type {DeckBackend,DeckBackendStatus,PreparedPresentation,PresentationRequest} from '../../presentation/backend';
 import {FileButtonStateStore} from './button-state';
-import {startPresentationService,type PresentationService} from './presentation';
+import {startPresentationCoordinator,type PresentationCoordinator} from './presentation';
 import {SignalStore} from './store';
 
 class Clock{
@@ -27,15 +28,22 @@ const document=():StudioDocument=>({version:3,id:'11111111-1111-4111-8111-111111
   button('next',4,single({type:'next-page'})),
 ]},{id:'other',title:'다른 화면',buttons:[button('previous',4,single({type:'previous-page'}))]}],standby:{color:'#000000'},motion:{pageChange:{type:'none',durationMs:0},unlock:{type:'none',durationMs:0},reconnect:{type:'none',durationMs:0}}});
 
-let directory='',store:SignalStore|undefined,service:PresentationService|undefined;
+class TestBackend implements DeckBackend{
+  state:DeckBackendStatus['state']='ready';private generation='';
+  async prepare(request:PresentationRequest){this.generation=request.generation;return{backend:'plugin' as const,generation:request.generation,token:request.generation};}
+  async present(_value:PreparedPresentation){}
+  status():DeckBackendStatus{return{mode:'plugin',state:this.state,connected:this.state==='ready'};}
+  async stop(){}
+}
+let directory='',store:SignalStore|undefined,service:PresentationCoordinator|undefined,backend:TestBackend|undefined;
 afterEach(async()=>{await service?.stop();service=undefined;store?.close();store=undefined;if(directory)rmSync(directory,{recursive:true,force:true});directory='';});
 const waitFor=async(predicate:()=>boolean)=>{for(let attempt=0;attempt<100&&!predicate();attempt++)await Bun.sleep(5);expect(predicate()).toBe(true);};
 
 test('advanced gestures execute exactly once, persist toggles and cancel delayed work on every lifecycle boundary',async()=>{
   directory=mkdtempSync(join(tmpdir(),'streamhub-advanced-actions-'));store=new SignalStore(':memory:');const clock=new Clock(),effects:ButtonEffect[]=[];
-  const start=()=>startPresentationService({store:store!,directory:join(directory,'studio'),gateway:{publish:()=>{},status:()=>({connected:true})},buttonState:new FileButtonStateStore(directory),now:()=>clock.now,schedule:clock.schedule,sleep:clock.sleep,execute:async effect=>{effects.push(effect);}});
+  const start=()=>startPresentationCoordinator({store:store!,directory:join(directory,'studio'),backend:backend=new TestBackend(),buttonState:new FileButtonStateStore(directory),now:()=>clock.now,schedule:clock.schedule,sleep:clock.sleep,execute:async effect=>{effects.push(effect);}});
   service=await start();const snapshot=service.snapshot();await service.apply(document(),snapshot.version);
-  const input=async(index:number,phase:'down'|'up')=>service!.message({v:1,type:'key',phase,index,generation:service!.status().generation!});
+  const input=async(index:number,phase:'down'|'up')=>service!.key({phase,index,generation:service!.status().generation!});
   const press=async(index:number)=>{await input(index,'down');await input(index,'up');};
   const urls=()=>effects.flatMap(effect=>effect.type==='open'?[effect.url]:[]);
 
@@ -51,8 +59,8 @@ test('advanced gestures execute exactly once, persist toggles and cancel delayed
   const beforePage=urls().length,pageCancelled=press(1);await waitFor(()=>urls().length===beforePage+1);await press(4);clock.advance(200);await pageCancelled;await press(4);
   const pageSlice=urls().slice(beforePage);expect(pageSlice).toEqual(['https://sequence-one.example/']);
 
-  const beforeLock=urls().length,lockCancelled=press(1);await waitFor(()=>urls().length===beforeLock+1);await service.message({v:1,type:'lock',locked:true});clock.advance(200);await lockCancelled;expect(urls().slice(beforeLock)).toEqual(['https://sequence-one.example/']);await service.message({v:1,type:'lock',locked:false});
-  const beforeDisconnect=urls().length,disconnectCancelled=press(1);await waitFor(()=>urls().length===beforeDisconnect+1);service.disconnect();clock.advance(200);await disconnectCancelled;expect(urls().slice(beforeDisconnect)).toEqual(['https://sequence-one.example/']);
+  const beforeLock=urls().length,lockCancelled=press(1);await waitFor(()=>urls().length===beforeLock+1);await service.locked(true);clock.advance(200);await lockCancelled;expect(urls().slice(beforeLock)).toEqual(['https://sequence-one.example/']);await service.locked(false);
+  const beforeDisconnect=urls().length,disconnectCancelled=press(1);await waitFor(()=>urls().length===beforeDisconnect+1);backend!.state='connecting';await service.backendReady();clock.advance(200);await disconnectCancelled;expect(urls().slice(beforeDisconnect)).toEqual(['https://sequence-one.example/']);
 
   const counts=urls().reduce<Record<string,number>>((result,url)=>({...result,[url]:(result[url]??0)+1}),{});expect(counts['https://press.example/']).toBe(1);expect(counts['https://double.example/']).toBe(1);expect(counts['https://hold.example/']).toBe(1);expect(counts['https://sequence-one.example/']).toBe(4);expect(counts['https://sequence-two.example/']).toBe(1);expect(counts['https://parallel-one.example/']).toBe(1);expect(counts['https://parallel-two.example/']).toBe(1);expect(counts['https://toggle-on.example/']).toBe(1);expect(counts['https://toggle-off.example/']).toBe(1);
 });

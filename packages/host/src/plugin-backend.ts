@@ -35,7 +35,7 @@ export async function startPluginBackend(options:{
       }
       if(message.type==='key'&&message.generation===activeGeneration&&!recoveringGeneration)options.events.key({index:message.index,phase:message.phase,generation:message.generation});
     },
-    connection(value){connected=value;if(!value)activeGeneration=undefined;},
+    connection(value){connected=value;if(!value){activeGeneration=undefined;options.events.ready();}},
   };
   try{
     gateway=(options.gatewayFactory??(callbacks=>startPluginGateway({port:options.port,token:options.token,onMessage:callbacks.message,onConnection:callbacks.connection})))(handlers);

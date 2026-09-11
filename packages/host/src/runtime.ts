@@ -8,8 +8,9 @@ import { Reconciler, type Membership } from './reconciler';
 import { startServer, type ServerOptions } from './server';
 import { SignalStore } from './store';
 import type { PageConfig } from '../../streamdeck/pages';
-import {startPluginGateway,type PluginGateway} from './plugin-gateway';
-import {startPresentationService,type PresentationService} from './presentation';
+import type {DeckBackend} from '../../presentation/backend';
+import {startPluginBackend} from './plugin-backend';
+import {startPresentationCoordinator,type PresentationCoordinator} from './presentation';
 import {startSessionMonitor} from './session-monitor';
 import {startAppContextMonitor} from './app-context';
 import {FileButtonStateStore} from './button-state';
@@ -50,8 +51,8 @@ export async function startHost(input: Config, directory: string, options: HostO
   let server: HostServer | undefined;
   let display: HostDisplay | undefined;
   let pendingDisplay: Promise<HostDisplay> | undefined;
-  let pluginGateway:PluginGateway|undefined;
-  let presentation:PresentationService|undefined;
+  let pluginBackend:DeckBackend|undefined;
+  let presentation:PresentationCoordinator|undefined;
   let presentationMonitor:{stop():Promise<void>}|undefined;
   let startupFailure:unknown;
   let closed = false;
@@ -70,7 +71,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       // handle has been acquired and disposed, rather than orphaning it on exit.
       let pendingFailure:unknown;
       if(pendingDisplay){try{display=await pendingDisplay;}catch(error){pendingFailure=error;}}
-      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginGateway?.stop())]);
+      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginBackend?.stop())]);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => server?.stop(true))]));
       results.push(...await Promise.allSettled([...jobs]));
       results.push(...await Promise.allSettled([Promise.resolve().then(() => store?.close())]));
@@ -94,9 +95,9 @@ export async function startHost(input: Config, directory: string, options: HostO
     const reconciler = new Reconciler(store, actions, Object.fromEntries(Object.entries(config.sources).map(([source, value]) => [source, value.allowedHosts ?? []])));
     if(config.streamdeckPlugin?.enabled){
       const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
-      pluginGateway=startPluginGateway({port:config.streamdeckPlugin.port,token,onMessage:message=>{void presentation?.message(message).catch(report);},onConnection:connected=>{if(!connected)presentation?.disconnect();}});
-      presentation=await startPresentationService({store,directory:join(directory,'studio'),gateway:pluginGateway,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
-      const sessionMonitor=await startSessionMonitor(state=>{void presentation?.message({v:1,type:'lock',locked:!state.active}).catch(report);},{cacheDir:join(directory,'native')});
+      pluginBackend=await startPluginBackend({port:config.streamdeckPlugin.port,token,onError:report,events:{key:event=>{void presentation?.key(event).catch(report);},ready:()=>{void presentation?.backendReady().catch(report);}}});
+      presentation=await startPresentationCoordinator({store,directory:join(directory,'studio'),backend:pluginBackend,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
+      const sessionMonitor=await startSessionMonitor(state=>{void presentation?.locked(!state.active).catch(report);},{cacheDir:join(directory,'native')});
       const contextMonitor=await startAppContextMonitor(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
       presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};
     }

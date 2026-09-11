@@ -28,14 +28,14 @@ test('runtime rollback closes store when server startup fails',async()=>{
 });
 test('display startup failure rolls back server and store',async()=>{
   const r=resources();r.dependencies.display=async()=>{throw new Error('monitor failed');};
-  await expect(startHost({...config,streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies})).rejects.toThrow('monitor failed');
+  await expect(startHost({...config,display:{mode:'hid'},streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies})).rejects.toThrow('monitor failed');
   expect(r.calls).toEqual(['store-open','server-open','server-stop','store-close']);
 });
 test('stop shares one promise and attempts all cleanup even if a step fails',async()=>{
   const r=resources();
   r.dependencies.display=async()=>({status:()=>({}),stop:async()=>{r.calls.push('display-stop');throw new Error('display close failed');}});
   r.dependencies.serve=()=>({url:new URL('http://127.0.0.1:31415'),stop:async()=>{r.calls.push('server-stop');throw new Error('server close failed');}});
-  const host=await startHost({...config,streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies});
+  const host=await startHost({...config,display:{mode:'hid'},streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies});
   const first=host.stop(),second=host.stop();
   expect(second).toBe(first);
   await expect(first).rejects.toBeInstanceOf(AggregateError);
@@ -48,7 +48,7 @@ test('abort during display startup prevents readiness and cleans up a late displ
   const started=deferred<void>();const gate=deferred<{status():unknown;stop():Promise<void>}>();
   let displaySignal:AbortSignal|undefined;
   r.dependencies.display=async(_store,_directory,options)=>{displaySignal=options.signal;started.resolve();return gate.promise;};
-  const starting=startHost({...config,streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies,signal:controller.signal});
+  const starting=startHost({...config,display:{mode:'hid'},streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies,signal:controller.signal});
   await started.promise;
   controller.abort();
   await Bun.sleep(0);
@@ -75,7 +75,7 @@ test('abort preserves pending display cleanup failure and still closes server an
   const r=resources();const controller=new AbortController();const started=deferred<void>();
   const gate=deferred<{status():unknown;stop():Promise<void>}>();
   r.dependencies.display=async()=>{started.resolve();return gate.promise;};
-  const starting=startHost({...config,streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies,signal:controller.signal});
+  const starting=startHost({...config,display:{mode:'hid'},streamdeck:{enabled:true}},'/unused',{dependencies:r.dependencies,signal:controller.signal});
   await started.promise;controller.abort();await Bun.sleep(0);
   gate.reject(new AggregateError([new DOMException('Cancelled','AbortError'),new Error('monitor cleanup failed')],'Display startup and cleanup failed'));
   await expect(starting).rejects.toBeInstanceOf(AggregateError);

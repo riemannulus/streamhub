@@ -3,7 +3,7 @@ import {PageBoard,studioDocumentToPageConfig,type PageContext} from '../../strea
 import {createGestureRecognizer,type Gesture} from '../../streamdeck/gestures';
 import type {PluginToRuntimeMessage,PresentationTrigger,RuntimeToPluginMessage} from '../../presentation/protocol';
 import {DeckVisualRenderer} from '../../presentation/render';
-import type {DeckSurface} from '../../presentation/backend';
+import type {DeckBackend,DeckBackendStatus,DeckSurface,PreparedPresentation,PresentationReason} from '../../presentation/backend';
 import type {FramePlan} from '../../presentation/playback';
 import {TransitionCompiler} from '../../presentation/transitions';
 import {StudioRepository,type StudioSnapshot} from '../../studio/repository';
@@ -14,6 +14,7 @@ import type {SignalStore} from './store';
 
 type Gateway={publish(message:RuntimeToPluginMessage):void;status():{connected:boolean;deviceId?:string}};
 export type PresentationService={message(message:PluginToRuntimeMessage):Promise<void>;disconnect():void;context(context:PageContext,now?:number):Promise<void>;refresh(trigger?:PresentationTrigger):Promise<void>;apply(document:StudioDocument,expectedVersion:string):Promise<StudioSnapshot>;snapshot():StudioSnapshot;status():{connected:boolean;deviceId?:string;locked:boolean;generation?:string};stop():Promise<void>};
+export type PresentationCoordinator={key(event:{index:number;phase:'down'|'up';generation:string}):Promise<void>;locked(value:boolean):Promise<void>;backendReady():Promise<void>;context(context:PageContext,now?:number):Promise<void>;refresh(reason?:PresentationReason):Promise<void>;apply(document:StudioDocument,expectedVersion:string):Promise<StudioSnapshot>;snapshot():StudioSnapshot;status():DeckBackendStatus&{generation?:string;locked:boolean};stop():Promise<void>};
 
 function publicFailure(error:unknown):string{
   if(error&&typeof error==='object'&&'code' in error){
@@ -135,4 +136,68 @@ export async function startPresentationService(options:{store:SignalStore;direct
     async stop(){closed=true;clearInterval(timer);gestures.accept({type:'cancel-all',reason:'stop',at:(options.now??Date.now)()});cancelExecutions();board.cancelInput();},
   };
   await publish('initial');return service;
+}
+
+export async function startPresentationCoordinator(options:{store:SignalStore;directory:string;backend:DeckBackend;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void};sleep?:ProgramContext['sleep']}):Promise<PresentationCoordinator>{
+  const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),executions=new Set<AbortController>(),buttonState=options.buttonState??new MemoryButtonStateStore();
+  type PreparedUnlock={prepared:PreparedPresentation;target:DeckSurface;revision:number;snapshotVersion:string;epoch:number};
+  let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),surface:DeckSurface|undefined,standby:DeckSurface|undefined,preparedUnlock:PreparedUnlock|undefined,generation=0,currentGeneration:string|undefined,lifecycle=0,publicationTicket=0,locked=false,closed=false,revision=options.store.state().revision,polling=false;
+  const validStateKeys=()=>new Set(snapshot.document.pages.flatMap(page=>(page.buttons??[]).map(button=>buttonStateKey({documentId:snapshot.document.id,pageId:page.id,buttonId:button.id}))));
+  await buttonState.prune(validStateKeys());board.update(options.store.records());
+  const cancelExecutions=()=>{for(const controller of executions)controller.abort();board.clearRunningActionStatuses();};
+  const cancelInput=(reason:string)=>{gestures.accept({type:'cancel-all',reason,at:(options.now??Date.now)()});cancelExecutions();board.cancelInput();};
+  const currentButton=(index:number)=>{const pageId=board.page().viewId??snapshot.document.defaultPageId,page=snapshot.document.pages.find(item=>item.id===pageId);return{pageId,button:page?.buttons?.find(item=>item.index===index)};};
+  const navigation=(action:ButtonAction):action is Extract<ButtonAction,{type:'go-to-page'|'previous-page'|'next-page'|'resume-auto-page'}>=>['go-to-page','previous-page','next-page','resume-auto-page'].includes(action.type);
+  const effect=(action:ButtonAction):ButtonEffect|undefined=>action.type==='open-app'?{type:'app',bundleId:action.bundleId}:action.type==='open-path'?{type:'path',path:action.path}:action.type==='open-url'?{type:'open',url:action.url,...(action.browserBundleId?{browserBundleId:action.browserBundleId}:{})}:action.type==='hotkey'?{type:'hotkey',keys:action.keys}:action.type==='text'?action:action.type==='media'?action:action.type==='registered'?{type:'action',name:action.name,args:action.args}:undefined;
+  const executable=(program:ActionProgram|undefined)=>!!program&&(program.type!=='single'||!['none','page-indicator'].includes(program.action.type));
+  let immediateGesture:Promise<void>|undefined;
+  const renderLive=async()=>{board.update(options.store.records());const deck=board.page(),page=snapshot.document.pages.find(item=>item.id===deck.viewId)??snapshot.document.pages.find(item=>item.id===snapshot.document.defaultPageId)!;return renderer.render(snapshot.document,page,deck,repository.assets,{toggle:(pageId,buttonId)=>buttonState.getToggle({documentId:snapshot.document.id,pageId,buttonId})});};
+  const nextGeneration=()=>`g${++generation}`;
+  const publish=async(reason:PresentationReason,spec=snapshot.document.motion.pageChange,provided?:DeckSurface)=>{
+    if(closed)return;
+    const ticket=++publicationTicket;cancelInput(reason);
+    const target=provided??(reason==='standby'?await renderer.renderStandby(snapshot.document,repository.assets):await renderLive());
+    if(closed||ticket!==publicationTicket)return;
+    const request={generation:nextGeneration(),reason,from:surface??target,to:target,transition:reason==='initial'||reason==='refresh'||reason==='standby'?{type:'none' as const,durationMs:0}:spec,inputEnabled:!locked};
+    const prepared=await options.backend.prepare(request);if(closed||ticket!==publicationTicket)return;
+    await options.backend.present(prepared);if(closed||ticket!==publicationTicket)return;
+    surface=target;currentGeneration=request.generation;
+    if(reason!=='standby'){standby=undefined;preparedUnlock=undefined;}
+  };
+  const prepareWhileLocked=async(epoch:number)=>{
+    const ticket=++publicationTicket,start=standby??await renderer.renderStandby(snapshot.document,repository.assets),target=await renderLive(),preparedRevision=revision,preparedVersion=snapshot.version,request={generation:nextGeneration(),reason:'unlock' as const,from:start,to:target,transition:snapshot.document.motion.unlock,inputEnabled:true};
+    const prepared=await options.backend.prepare(request);
+    if(closed||!locked||epoch!==lifecycle||ticket!==publicationTicket)return;
+    standby=start;preparedUnlock={prepared,target,revision:preparedRevision,snapshotVersion:preparedVersion,epoch};
+  };
+  const execute=async(intent:Extract<ReturnType<PageBoard['up']>,{type:'button-effect'|'effect'}>)=>{
+    const controller=new AbortController();executions.add(controller);
+    try{await options.execute(intent.effect,controller.signal);if(!controller.signal.aborted&&!closed&&intent.type==='button-effect')board.setActionStatus(intent.pageId,intent.index,'success');}
+    catch(error){if(!controller.signal.aborted&&!closed&&intent.type==='button-effect')board.setActionStatus(intent.pageId,intent.index,'error',publicFailure(error));}
+    finally{executions.delete(controller);}
+    if(!controller.signal.aborted&&!locked&&!closed)await publish('refresh');
+  };
+  const executeBehavior=async(pageId:string,button:ButtonDefinition,program:ActionProgram)=>{
+    const stateKey={documentId:snapshot.document.id,pageId,buttonId:button.id},toggle=program.type==='toggle'?(buttonState.getToggle(stateKey)??program.initial):undefined,resolved=program.type==='toggle'?{...program,initial:toggle!}:program;
+    const singleNavigation=program.type==='single'&&navigation(program.action);if(!singleNavigation){board.setActionStatus(pageId,button.index,'running');await publish('refresh');}
+    if(locked||closed)return;const controller=new AbortController();executions.add(controller);let result:ActionResult,navigated=false;
+    try{result=await executeProgram(resolved,{signal:controller.signal,...(options.sleep?{sleep:options.sleep}:{}),run:async(action,signal)=>{if(navigation(action)){const moved=board.navigateAction(action);navigated ||= moved;return moved?{ok:true}:{ok:false,code:'navigation-unavailable',message:'Page navigation is unavailable'};}const mapped=effect(action);if(!mapped)return{ok:false,code:'not-executable',message:'Action is not executable'};try{await options.execute(mapped,signal);return{ok:true};}catch(error){return{ok:false,code:typeof (error as {code?:unknown})?.code==='string'?(error as {code:string}).code:'execution-failed',message:publicFailure(error)};}}});}
+    finally{executions.delete(controller);}
+    if(controller.signal.aborted||closed||locked)return;if(result!.ok&&toggle)try{await buttonState.setToggle(stateKey,toggle==='off'?'on':'off');}catch{result={ok:false,code:'state-write-failed',message:'토글 상태를 저장하지 못했습니다.'};}
+    if(navigated){await publish('page');return;}const current=currentButton(button.index);if(current.pageId!==pageId||current.button?.id!==button.id)return;if(!singleNavigation)board.setActionStatus(pageId,button.index,result!.ok?'success':'error',result!.ok?undefined:result!.message);await publish('refresh');
+  };
+  const gestures=createGestureRecognizer({schedule:options.schedule??((delay,callback)=>{const timer=setTimeout(callback,delay);return{cancel:()=>clearTimeout(timer)};}),resolve:(key,binding)=>{if(binding!==generation)return;const {button}=currentButton(key);if(!button)return;return{press:executable(button.behavior.press),doublePress:executable(button.behavior.doublePress),hold:executable(button.behavior.hold),doublePressMs:button.behavior.doublePressMs,holdMs:button.behavior.holdMs};},emit:(key,binding,gesture:Gesture)=>{if(binding!==generation||locked||closed)return;const {pageId,button}=currentButton(key);if(!button)return;const program=gesture==='press'?button.behavior.press:gesture==='double-press'?button.behavior.doublePress:button.behavior.hold;if(!program)return;const task=executeBehavior(pageId,button,program);immediateGesture=task;void task.catch(()=>{});}});
+  const timer=setInterval(()=>{if(closed||polling)return;const next=options.store.state().revision;if(next===revision)return;revision=next;board.update(options.store.records());polling=true;const task=locked?prepareWhileLocked(lifecycle):publish('refresh');void task.finally(()=>{polling=false;});},100);
+  const coordinator:PresentationCoordinator={
+    async key(event){if(closed||locked||event.generation!==currentGeneration)return;const fixed=currentButton(event.index).button;if(fixed){immediateGesture=undefined;gestures.accept({type:event.phase,key:event.index,bindingRevision:generation,at:(options.now??Date.now)()});const task=immediateGesture;if(task)await task;return;}if(event.phase==='down'){board.down(event.index);return;}const intent=board.up(event.index);if(!intent)return;if(intent.type==='button-effect'||intent.type==='effect'){await execute(intent);return;}await publish('page');},
+    async locked(value){if(closed||locked===value)return;locked=value;const epoch=++lifecycle;cancelInput('lock');if(value){preparedUnlock=undefined;const target=await renderer.renderStandby(snapshot.document,repository.assets);if(closed||!locked||epoch!==lifecycle)return;standby=target;await publish('standby',snapshot.document.motion.unlock,target);if(closed||!locked||epoch!==lifecycle)return;await prepareWhileLocked(epoch);return;}const next=options.store.state().revision;if(next!==revision){revision=next;board.update(options.store.records());}const cached=preparedUnlock&&preparedUnlock.revision===revision&&preparedUnlock.snapshotVersion===snapshot.version&&preparedUnlock.epoch===epoch-1?preparedUnlock:undefined;let prepared=cached;if(!prepared){const start=standby??await renderer.renderStandby(snapshot.document,repository.assets),target=await renderLive(),request={generation:nextGeneration(),reason:'unlock' as const,from:start,to:target,transition:snapshot.document.motion.unlock,inputEnabled:true};prepared={prepared:await options.backend.prepare(request),target,revision,snapshotVersion:snapshot.version,epoch:epoch-1};}if(closed||locked||epoch!==lifecycle)return;++publicationTicket;await options.backend.present(prepared.prepared);if(closed||locked||epoch!==lifecycle)return;surface=prepared.target;currentGeneration=prepared.prepared.generation;standby=undefined;preparedUnlock=undefined;},
+    async backendReady(){if(closed||locked)return;const status=options.backend.status();if(status.state!=='ready'){cancelInput('backend');return;}await publish('reconnect',snapshot.document.motion.reconnect);},
+    async context(value,now=Date.now()){board.context(value,now);if(!locked)await publish('page');},
+    refresh:async(reason='refresh')=>publish(reason),
+    async apply(document,expectedVersion){cancelInput('apply');snapshot=repository.apply(document,expectedVersion);await buttonState.prune(validStateKeys());board=new PageBoard(studioDocumentToPageConfig(snapshot.document));board.update(options.store.records());await publish('page');return snapshot;},
+    snapshot:()=>structuredClone(snapshot),
+    status:()=>({...options.backend.status(),locked,...(currentGeneration?{generation:currentGeneration}:{})}),
+    async stop(){if(closed)return;closed=true;++publicationTicket;clearInterval(timer);cancelInput('stop');},
+  };
+  await publish('initial');return coordinator;
 }

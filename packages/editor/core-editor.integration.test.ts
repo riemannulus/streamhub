@@ -3,16 +3,16 @@ import {createHash} from 'node:crypto';
 import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {RuntimeToPluginMessage} from '../presentation/protocol';
+import type {DeckBackend,DeckBackendStatus,PreparedPresentation,PresentationRequest} from '../presentation/backend';
 import {singlePressBehavior,type ButtonAction,type ButtonDefinition,type StudioDocument} from '../studio/document';
 import type {ButtonEffect} from '../streamdeck';
 import {SignalStore} from '../host/src/store';
-import {startPresentationService,type PresentationService} from '../host/src/presentation';
+import {startPresentationCoordinator,type PresentationCoordinator} from '../host/src/presentation';
 import {startServer} from '../host/src/server';
 import {startEditorServer} from './server';
 
 const adminToken='a'.repeat(32),sourceToken='b'.repeat(32);
-let directory='',editor:ReturnType<typeof startEditorServer>|undefined,host:ReturnType<typeof startServer>|undefined,presentation:PresentationService|undefined,store:SignalStore|undefined;
+let directory='',editor:ReturnType<typeof startEditorServer>|undefined,host:ReturnType<typeof startServer>|undefined,presentation:PresentationCoordinator|undefined,store:SignalStore|undefined;
 
 afterEach(async()=>{
   await editor?.stop();editor=undefined;
@@ -25,20 +25,21 @@ afterEach(async()=>{
 
 const appearance=(label:string):ButtonDefinition['appearance']=>({contentMode:'label-only',label:{text:label,position:'center',size:'small',color:'#ffffff'}});
 const button=(id:string,index:number,label:string,action:ButtonAction):ButtonDefinition=>({id,index,behavior:singlePressBehavior(action),appearance:appearance(label)});
-const presentationMessage=(messages:RuntimeToPluginMessage[])=>{
-  const message=messages.at(-1);
-  if(message?.type!=='presentation')throw new Error('Expected a presentation message');
-  return message;
-};
-const frameHash=(messages:RuntimeToPluginMessage[])=>createHash('sha256').update(presentationMessage(messages).plan.frames.at(-1)!.keys.join('\n')).digest('hex');
+class TestBackend implements DeckBackend{
+  requests:PresentationRequest[]=[];
+  async prepare(request:PresentationRequest){this.requests.push(request);return{backend:'plugin' as const,generation:request.generation,token:request.generation};}
+  async present(_value:PreparedPresentation){}
+  status():DeckBackendStatus{return{mode:'plugin',state:'ready',connected:true};}
+  async stop(){}
+}
+const frameHash=(backend:TestBackend)=>createHash('sha256').update(backend.requests.at(-1)!.to.keyPngs.map(bytes=>`data:image/png;base64,${bytes.toString('base64')}`).join('\n')).digest('hex');
 
 test('blank Studio builds, applies and operates a complete three-page core deck',async()=>{
   directory=mkdtempSync(join(tmpdir(),'streamhub-core-editor-'));
   store=new SignalStore(':memory:');
-  const messages:RuntimeToPluginMessage[]=[],effects:ButtonEffect[]=[];
-  presentation=await startPresentationService({
-    store,directory:join(directory,'studio'),
-    gateway:{publish:message=>messages.push(message),status:()=>({connected:true,deviceId:'fake-deck'})},
+  const backend=new TestBackend(),effects:ButtonEffect[]=[];
+  presentation=await startPresentationCoordinator({
+    store,directory:join(directory,'studio'),backend,
     execute:async effect=>{effects.push(effect);},
   });
   host=startServer({store,port:0,adminToken,sources:{demo:{token:sourceToken}},studio:presentation});
@@ -87,10 +88,10 @@ test('blank Studio builds, applies and operates a complete three-page core deck'
 
   const press=async(index:number)=>{
     const generation=presentation!.status().generation!;
-    await presentation!.message({v:1,type:'key',phase:'down',index,generation});
-    await presentation!.message({v:1,type:'key',phase:'up',index,generation});
+    await presentation!.key({phase:'down',index,generation});
+    await presentation!.key({phase:'up',index,generation});
   };
-  const hashes:Record<string,string>={home:frameHash(messages)};
+  const hashes:Record<string,string>={home:frameHash(backend)};
   for(const index of [0,1,2,3,4])await press(index);
   expect(effects).toEqual([
     {type:'app',bundleId:'org.mozilla.firefox'},
@@ -99,13 +100,13 @@ test('blank Studio builds, applies and operates a complete three-page core deck'
     {type:'text',text:'Streamhub',mode:'type'},
     {type:'media',command:'play-pause'},
   ]);
-  hashes.homeAfterActions=frameHash(messages);
+  hashes.homeAfterActions=frameHash(backend);
 
-  await press(11);hashes.web=frameHash(messages);
-  await press(12);hashes.media=frameHash(messages);
-  await press(10);hashes.webAfterPrevious=frameHash(messages);
-  const beforeIndicator=messages.length;await press(13);expect(messages).toHaveLength(beforeIndicator);
-  await press(14);hashes.homeAfterAutomatic=frameHash(messages);
+  await press(11);hashes.web=frameHash(backend);
+  await press(12);hashes.media=frameHash(backend);
+  await press(10);hashes.webAfterPrevious=frameHash(backend);
+  const beforeIndicator=backend.requests.length;await press(13);expect(backend.requests).toHaveLength(beforeIndicator);
+  await press(14);hashes.homeAfterAutomatic=frameHash(backend);
   expect(effects).toHaveLength(5);
   expect(hashes).toEqual({
     home:'eca5a48af45f36d3e3b0ca1e588cf59d2809f427e5fa0ac1461294e04e9caafd',
