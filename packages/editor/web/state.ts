@@ -1,6 +1,7 @@
 import type {AppCatalogItem,PathPickerResult} from '../../host/src/catalog';
 import type {StudioDocument} from '../../studio/document';
 import {StudioModel} from './model';
+import type {IconPackIcon,IconPackSummary} from '../icon-packs';
 
 export type Geometry={x:number[];y:number[]};
 export type RegisteredActionItem={name:string;args:string[]};
@@ -28,5 +29,9 @@ export class StudioState{
     if(!response.ok)throw new Error(body.error??'장치에 적용하지 못했습니다.');this.version=body.version!;this.runtimeStatus=body.runtimeStatus??this.runtimeStatus;this.model.markApplied();
   }
   async upload(file:File):Promise<string>{const response=await this.request('/api/assets',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':file.type||'application/octet-stream'},body:file}),body=await response.json() as {assetId?:string;error?:string};if(!response.ok)throw new Error(body.error??'이미지를 저장하지 못했습니다.');return body.assetId!;}
+  async iconPacks():Promise<IconPackSummary[]>{const response=await this.request('/api/icon-packs',{headers:{'X-Streamhub-Editor':this.token}}),body=await response.json() as IconPackSummary[]&{error?:string};if(!response.ok)throw new Error(body.error??'아이콘팩 목록을 불러오지 못했습니다.');return body;}
+  async iconPackIcons(packId:string,query=''):Promise<IconPackIcon[]>{const response=await this.request(`/api/icon-packs/${encodeURIComponent(packId)}/icons?q=${encodeURIComponent(query)}`,{headers:{'X-Streamhub-Editor':this.token}}),body=await response.json() as IconPackIcon[]&{error?:string};if(!response.ok)throw new Error(body.error??'아이콘 목록을 불러오지 못했습니다.');return body;}
+  async iconPreview(packId:string,iconId:string):Promise<Blob>{const response=await this.request(`/api/icon-packs/${encodeURIComponent(packId)}/icons/${encodeURIComponent(iconId)}/preview`,{headers:{'X-Streamhub-Editor':this.token}});if(!response.ok)throw new Error('아이콘 미리보기를 불러오지 못했습니다.');return response.blob();}
+  async importIcon(packId:string,iconId:string):Promise<string>{const response=await this.request('/api/icon-packs/import',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':'application/json'},body:JSON.stringify({packId,iconId})}),body=await response.json() as {assetId?:string;error?:string};if(!response.ok||!body.assetId)throw new Error(body.error??'아이콘을 가져오지 못했습니다.');return body.assetId;}
   async pick(kind:'file'|'folder'):Promise<PathPickerResult>{const response=await this.request('/api/picker/path',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':'application/json'},body:JSON.stringify({kind})}),body=await response.json() as PathPickerResult&{error?:string};if(!response.ok)throw new Error(body.error??'경로를 선택하지 못했습니다.');return body;}
 }

@@ -37,3 +37,11 @@ test('each successful change queues exactly one draft save',async()=>{
   for(let attempt=0;attempt<10&&calls.filter(call=>call==='POST /api/draft').length<2;attempt++)await Bun.sleep(0);
   expect(calls.filter(call=>call==='POST /api/draft')).toHaveLength(2);
 });
+
+test('icon library loads packs lazily, searches one pack and imports the selected icon',async()=>{
+  const calls:{url:string;init?:RequestInit}[]=[],document=defaultStudioDocument(),packId='a'.repeat(64),iconId='b'.repeat(64);
+  const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);calls.push({url,init});if(url==='/api/bootstrap')return Response.json({token:'t',snapshot:{document,version:'v1'},runtimeStatus:{connected:false},geometry:{x:[11,108,205,302,399],y:[5,102,199]}});if(url.includes('/catalog/'))return Response.json([]);if(url==='/api/icon-packs')return Response.json([{id:packId,name:'Media',version:'1.0.0',author:'Example',iconCount:1,hasLicense:true}]);if(url.includes('/icons?'))return Response.json([{id:iconId,name:'Play',tags:['media'],animated:false}]);if(url==='/api/icon-packs/import')return Response.json({assetId:'c'.repeat(64)});return Response.json({error:'Not found'},{status:404});};
+  const state=await StudioState.connect(request as typeof fetch);expect((await state.iconPacks())[0]?.name).toBe('Media');expect((await state.iconPackIcons(packId,'재생'))[0]?.name).toBe('Play');expect(await state.importIcon(packId,iconId)).toBe('c'.repeat(64));
+  expect(calls.find(call=>call.url.includes('/icons?'))?.url).toBe(`/api/icon-packs/${packId}/icons?q=${encodeURIComponent('재생')}`);
+  const imported=calls.find(call=>call.url==='/api/icon-packs/import')!;expect(imported.init?.method).toBe('POST');expect(imported.init?.body).toBe(JSON.stringify({packId,iconId}));
+});

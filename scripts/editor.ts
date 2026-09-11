@@ -6,7 +6,7 @@ const assetsDir = resolve('.streamhub/editor');
 await mkdir(assetsDir, {recursive: true});
 const build = await Bun.build({entrypoints: ['packages/editor/web/app.ts'], outdir: assetsDir, target: 'browser'});
 if (!build.success) { console.error('Editor build failed:', build.logs); process.exit(1); }
-await Promise.all(['index.html','style.css'].map(file => copyFile(`packages/editor/web/${file}`, resolve(assetsDir,file))));
+await Promise.all(['index.html','style.css','icon-library.css'].map(file => copyFile(`packages/editor/web/${file}`, resolve(assetsDir,file))));
 const editor = startEditorServer({assetsDir});
 console.log(editor.url);
 let stopping = false;

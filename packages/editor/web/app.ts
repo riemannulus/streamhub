@@ -6,6 +6,7 @@ import {renderInspector} from './inspector-view';
 import {renderPages} from './pages-view';
 import {StudioState} from './state';
 import {shortcutFor} from './clipboard';
+import {chooseIconFromLibrary} from './icon-library';
 
 const $=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(id) as T;
 const input=(id:string)=>$<HTMLInputElement>(id),select=(id:string)=>$<HTMLSelectElement>(id);
@@ -36,7 +37,7 @@ function render(){
   renderActionLibrary($('actions'),query,chooseAction);$('action-pane').classList.toggle('disabled',standby);
   renderCanvas($('canvas'),studio.model,studio.geometry,{standby,select:index=>{studio.model.selectKey(index);render();},drop:(type,index)=>chooseAction(type,index),moveStart:index=>{dragSource={pageId:studio.model.selectedPageId,index};},moveDrop:index=>{if(!dragSource)return;try{const occupied=currentPage().buttons?.some(button=>button.index===index),swap=!!occupied&&confirm('두 버튼의 위치를 서로 바꿀까요?');if(occupied&&!swap)return;const moved=studio.model.moveButton(dragSource,{pageId:studio.model.selectedPageId,index},swap);dragSource=undefined;if(moved)changed();else render();}catch(error){showError(String(error));}}});
   if(standby){$('inspector').innerHTML='<div class="inspector-heading"><span>☾</span><div><h2>대기 화면</h2><small>잠금 상태</small></div></div><div class="empty-inspector"><b>전체 화면 설정</b><p>가운데 상단에서 배경 이미지, 색상과 맞춤 방식을 설정하세요.</p></div>';}
-  else renderInspector($('inspector'),studio.model,{apps:studio.apps,actions:studio.actions,upload:file=>studio.upload(file),pick:kind=>studio.pick(kind),changed,error:showError,refresh:render});
+  else renderInspector($('inspector'),studio.model,{apps:studio.apps,actions:studio.actions,upload:file=>studio.upload(file),chooseIcon:()=>chooseIconFromLibrary(studio),pick:kind=>studio.pick(kind),changed,error:showError,refresh:render});
   renderSurfaceTools();for(const [id,trigger] of [['page-motion','pageChange'],['unlock-motion','unlock'],['reconnect-motion','reconnect']] as const)select(id).value=studio.model.document.motion[trigger].type;
 }
 

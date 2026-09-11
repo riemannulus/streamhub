@@ -14,9 +14,11 @@ import {renderStudioBackground} from '../presentation/render';
 import {composeButton} from '../presentation/button-compositor';
 import {actionCatalog} from '../host/src/key-actions';
 import {AppCatalog,normalizeAppCatalog,normalizePickerResult,pickNativePath,type PathPickerResult} from '../host/src/catalog';
+import {IconPackCatalog} from './icon-packs';
+import {normalizeVisualAsset} from '../studio/assets';
 
 const LIMIT = 9 * 1024 * 1024;
-const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css']]);
+const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css'],['/icon-library.css','icon-library.css']]);
 const version = (config: Config) => createHash('sha256').update(JSON.stringify(config)).digest('hex');
 function boardOf(config: Config): PageConfig {
   return config.streamdeck?.board ?? {
@@ -31,7 +33,7 @@ class Conflict extends Error {}
 type Client = {session?: SimulatorSession};
 
 /** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
-export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>} = {}) {
+export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>;iconPacks?:Pick<IconPackCatalog,'packs'|'icons'|'read'>} = {}) {
   readConfig(true);
   const studioDirectory=join(dirname(process.env.STREAMHUB_CONFIG??resolve('.streamhub/config.json')),'studio');
   const repository=new StudioRepository(studioDirectory);
@@ -40,7 +42,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
   const clients = new Set<Bun.ServerWebSocket<Client>>();
   const reports=new Map<string,string>();
-  const appCatalog=options.appCatalog??new AppCatalog(),pickPath=options.pickPath??pickNativePath;
+  const appCatalog=options.appCatalog??new AppCatalog(),pickPath=options.pickPath??pickNativePath,iconPacks=options.iconPacks??new IconPackCatalog();
   let checking:Promise<unknown>|undefined;
   let stopped = false;
   let stopping: Promise<void> | undefined;
@@ -83,6 +85,22 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         }
         if(url.pathname==='/api/catalog/actions'&&request.method==='GET'){
           try{return json(actionCatalog(readConfig().actions??{}));}catch{return json({error:'동작 목록을 불러오지 못했습니다.'},500);}
+        }
+        if(url.pathname==='/api/icon-packs'&&request.method==='GET'){
+          try{return json(await iconPacks.packs());}catch{return json({error:'아이콘팩 목록을 불러오지 못했습니다.'},500);}
+        }
+        const packIcons=/^\/api\/icon-packs\/([a-f0-9]{64})\/icons$/.exec(url.pathname);
+        if(packIcons&&request.method==='GET'){
+          const query=url.searchParams.get('q')??'';if(query.length>80)return json({error:'검색어가 너무 깁니다.'},400);
+          try{return json(await iconPacks.icons(packIcons[1]!,query));}catch{return json({error:'아이콘팩을 찾지 못했습니다.'},404);}
+        }
+        const packPreview=/^\/api\/icon-packs\/([a-f0-9]{64})\/icons\/([a-f0-9]{64})\/preview$/.exec(url.pathname);
+        if(packPreview&&request.method==='GET'){
+          try{return new Response(new Uint8Array(await normalizeVisualAsset(await iconPacks.read(packPreview[1]!,packPreview[2]!))),{headers:{...headers,'Content-Type':'image/png'}});}catch{return json({error:'아이콘을 읽지 못했습니다.'},404);}
+        }
+        if(url.pathname==='/api/icon-packs/import'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          try{const payload=await request.json() as Record<string,unknown>;if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).length!==2||typeof payload.packId!=='string'||typeof payload.iconId!=='string'||!/^[a-f0-9]{64}$/.test(payload.packId)||!/^[a-f0-9]{64}$/.test(payload.iconId))throw new Error('Invalid icon selection');return json({assetId:await repository.putAsset(await iconPacks.read(payload.packId,payload.iconId))});}catch(error){return json({error:error instanceof Error?error.message:'아이콘을 가져오지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/picker/path'&&request.method==='POST'){
           if(request.headers.get('origin')!==origin)return json({error:'Forbidden'},403);

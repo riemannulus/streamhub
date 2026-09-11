@@ -1,18 +1,21 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync, writeFileSync, readFileSync} from 'node:fs';
+import {mkdirSync,mkdtempSync, rmSync, writeFileSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startEditorServer} from './server';
 import {PageBoard} from '../streamdeck/pages';
 import sharp from 'sharp';
+import {IconPackCatalog} from './icon-packs';
 
 const original = process.env.STREAMHUB_CONFIG;
 let editor: ReturnType<typeof startEditorServer> | undefined;
 let directory: string;
+const extraDirectories:string[]=[];
 afterEach(async () => {
   await editor?.stop(); editor = undefined;
   if (original === undefined) delete process.env.STREAMHUB_CONFIG; else process.env.STREAMHUB_CONFIG = original;
   if (directory) rmSync(directory, {recursive:true,force:true});
+  extraDirectories.splice(0).forEach(path=>rmSync(path,{recursive:true,force:true}));
 });
 const baseConfig = () => ({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},future:{keep:true}});
 async function setup(serverOptions:Omit<Parameters<typeof startEditorServer>[0],'port'|'assetsDir'>={},config:ReturnType<typeof baseConfig>=baseConfig()) {
@@ -145,4 +148,18 @@ test('catalog and native picker APIs expose only bounded local choices',async()=
   const cancelled=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'folder'})});expect(await cancelled.json()).toEqual({cancelled:true});
   const injected=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'file',path:'/etc/passwd'})});expect(injected.status).toBe(400);
   expect(picks).toEqual(['file','folder']);
+});
+
+test('icon pack APIs search, preview and import an installed icon without exposing its path',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-editor-icon-pack-'));extraDirectories.push(root);const pack=join(root,'com.example.media.sdIconPack');mkdirSync(join(pack,'icons'),{recursive:true});
+  writeFileSync(join(pack,'manifest.json'),JSON.stringify({Name:'Media',Version:'1.0.0',Author:'Example',Icon:'icon.png'}));
+  writeFileSync(join(pack,'icons.json'),JSON.stringify([{path:'play.svg',name:'Play',tags:['media','재생']}]))
+  writeFileSync(join(pack,'icons','play.svg'),'<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="#44cc88"/></svg>');
+  const {url,bootstrap}=await setup({iconPacks:new IconPackCatalog({roots:[root]})}),headers={'X-Streamhub-Editor':bootstrap.token};
+  expect((await fetch(`${url}/api/icon-packs`)).status).toBe(403);
+  const packs=await (await fetch(`${url}/api/icon-packs`,{headers})).json() as any[];expect(packs).toHaveLength(1);expect(JSON.stringify(packs)).not.toContain(root);
+  const icons=await (await fetch(`${url}/api/icon-packs/${packs[0].id}/icons?q=${encodeURIComponent('재생')}`,{headers})).json() as any[];expect(icons).toEqual([{id:expect.stringMatching(/^[a-f0-9]{64}$/),name:'Play',tags:['media','재생'],animated:false}]);
+  const preview=await fetch(`${url}/api/icon-packs/${packs[0].id}/icons/${icons[0].id}/preview`,{headers});expect(preview.status).toBe(200);expect(preview.headers.get('Content-Type')).toBe('image/png');expect(await sharp(await preview.arrayBuffer()).metadata()).toMatchObject({width:144,height:144});
+  const imported=await fetch(`${url}/api/icon-packs/import`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({packId:packs[0].id,iconId:icons[0].id})});expect(imported.status).toBe(200);const {assetId}=await imported.json() as {assetId:string};expect((await fetch(`${url}/api/assets/${assetId}`)).status).toBe(200);
+  expect((await fetch(`${url}/api/icon-packs/import`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({packId:'../bad',iconId:icons[0].id})})).status).toBe(400);
 });
