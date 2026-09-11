@@ -36,12 +36,10 @@ streamhub-<version>-macos-arm64/
   uninstall.sh
   bin/
     streamhub
-    streamhub-studio
-    streamhub-mode-hid
-    streamhub-mode-plugin
   app/
     runtime.js
     studio.js
+    cli.js
     register-hid.js
     setup-plugin.js
     package.json
@@ -67,7 +65,7 @@ Generated plugin logs, tests, source maps, caches, `.streamhub`, repository hist
 
 1. Reject unsupported host architecture or a dirty/invalid version definition.
 2. Run the existing Runtime build and build the Studio browser assets ahead of time.
-3. Bundle package-specific Runtime, Studio, and mode-selection entry points for Bun.
+3. Bundle package-specific Runtime, Studio, and single-CLI entry points for Bun.
 4. Build the Stream Deck plugin and copy its bundle without runtime logs.
 5. Install only production dependencies into the staging payload using the lockfile.
 6. Copy user and developer documentation, native helper source, launchers, and safe install scripts.
@@ -76,15 +74,26 @@ Generated plugin logs, tests, source maps, caches, `.streamhub`, repository hist
 
 Build output is replaced atomically only after validation succeeds. A failed build must not leave an artifact that looks complete.
 
-## Runtime and Studio launchers
+## User command, Runtime, and Studio
 
-The launchers discover their installed package root from their own real path and invoke the packaged entry point with Bun. They set the default config path to:
+The package exposes one `streamhub` command. Its launcher discovers the installed package root from its own real path, invokes the packaged CLI entry point with Bun, and sets the default config path to:
 
 `~/Library/Application Support/Streamhub/data/config.json`
 
 Runtime and Studio therefore share one durable user-data directory regardless of the caller's current directory. Explicit `STREAMHUB_CONFIG` continues to override the default for advanced use.
 
-The packaged Studio entry point serves the prebuilt files under `share/studio`; it never tries to compile browser TypeScript at user runtime. The Runtime entry point retains the current single-owner HID/plugin behavior.
+The CLI provides these user-facing commands:
+
+- `streamhub setup`: interactively choose HID or plugin mode. `streamhub setup hid|plugin` provides a non-interactive equivalent.
+- `streamhub start`: run Runtime in the foreground and stop it with Ctrl-C.
+- `streamhub studio`: start the Studio server and open it in the default browser. `--no-open` leaves the browser closed.
+- `streamhub status`: print only sanitized Runtime and configured-mode status.
+- `streamhub version`: print package and protocol versions.
+- `streamhub uninstall`: remove the installed application while retaining user data.
+
+Unknown subcommands and options fail without starting Runtime, opening a browser, or changing configuration.
+
+The packaged Studio entry point serves the prebuilt files under `share/studio`; it never tries to compile browser TypeScript at user runtime. The Runtime entry point retains the current single-owner HID/plugin behavior. Studio remains the existing browser UI rather than a Dock application in this preview.
 
 ## Install and uninstall
 
@@ -92,21 +101,23 @@ The packaged Studio entry point serves the prebuilt files under `share/studio`; 
 
 `~/Library/Application Support/Streamhub/app/<version>`
 
-and creates marked command shims under:
+and creates one marked command shim at:
 
-`~/Library/Application Support/Streamhub/bin`
+`~/.local/bin/streamhub`
+
+The installer does not edit shell startup files. If `~/.local/bin` is not on `PATH`, it prints the exact one-line shell configuration the user may add and shows the absolute command path that works immediately.
 
 An existing Streamhub preview version may be replaced only when its marker matches. Unknown files and symlinks are refused. Installation never imports the build machine's configuration, Studio document, assets, tokens, icon packs, or device identifiers.
 
-`uninstall.sh` removes only the matching installed payload and marked shims. It preserves `data/`, Studio documents, assets, and plugin credentials, and prints their retained location. Removing user data is a separate explicit manual action documented in the user README.
+`streamhub uninstall` and the archive's fallback `uninstall.sh` remove only the matching installed payload and marked shim. They preserve `data/`, Studio documents, assets, and plugin credentials, and print their retained location. Removing user data is a separate explicit manual action documented in the user README.
 
 No launchd service is installed in this preview. Users start Runtime and Studio from a terminal; background login startup belongs to a later packaging milestone.
 
 ## Display-mode setup
 
-`streamhub-mode-hid` initializes or updates the installed config to select HID mode. Its output tells the user to quit Stream Deck App before starting Runtime.
+`streamhub setup hid` initializes or updates the installed config to select HID mode. Its output tells the user to quit Stream Deck App before starting Runtime.
 
-`streamhub-mode-plugin` creates the private plugin token and connection file, selects plugin mode, and safely installs the bundled plugin into the current user's Stream Deck plugin directory. If a different existing plugin bundle is present, it is backed up with a timestamp before replacement. The bundled profile uses `AutoInstall`; the user may still need to select it in Stream Deck App and restart that app.
+`streamhub setup plugin` creates the private plugin token and connection file, selects plugin mode, and safely installs the bundled plugin into the current user's Stream Deck plugin directory. If a different existing plugin bundle is present, it is backed up with a timestamp before replacement. The bundled profile uses `AutoInstall`; the user may still need to select it in Stream Deck App and restart that app.
 
 Changing modes remains restart-gated. Setup never silently falls back to the other backend.
 
@@ -139,7 +150,7 @@ Automated tests must prove:
 
 - Manifest parsing rejects missing, unknown, inconsistent, or unsafe values.
 - Package assembly includes every required file and excludes credentials, `.streamhub`, logs, tests, and development-only files.
-- Launchers resolve paths containing spaces and select the installed data directory.
+- The single CLI resolves paths containing spaces, rejects unknown commands, and selects the installed data directory.
 - Install is repeatable, refuses unowned targets, and never overwrites user data.
 - Uninstall removes only marked package files and preserves user data.
 - Plugin replacement creates a recoverable backup.
@@ -150,7 +161,7 @@ Manual acceptance for this preview is:
 
 1. Extract the archive outside the repository.
 2. Install it as the current user.
-3. Start Runtime and Studio from the installed shims.
+3. Start Runtime and Studio from the installed `streamhub` command.
 4. Verify HID mode owns the device and preserves the configured standby screen through lock/unlock.
 5. Verify plugin mode can be selected and its bundled profile receives a Studio-applied page.
 6. Uninstall and confirm the Studio document and credentials remain.
