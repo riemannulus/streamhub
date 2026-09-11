@@ -2,7 +2,8 @@ import type {ButtonEffect} from '../../streamdeck';
 import {PageBoard,studioDocumentToPageConfig,type PageContext} from '../../streamdeck/pages';
 import {createGestureRecognizer,type Gesture} from '../../streamdeck/gestures';
 import type {PluginToRuntimeMessage,PresentationTrigger,RuntimeToPluginMessage} from '../../presentation/protocol';
-import {DeckVisualRenderer,type DeckCanvas} from '../../presentation/render';
+import {DeckVisualRenderer} from '../../presentation/render';
+import type {DeckSurface} from '../../presentation/backend';
 import type {FramePlan} from '../../presentation/playback';
 import {TransitionCompiler} from '../../presentation/transitions';
 import {StudioRepository,type StudioSnapshot} from '../../studio/repository';
@@ -27,7 +28,7 @@ function publicFailure(error:unknown):string{
 export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void};sleep?:ProgramContext['sleep']}):Promise<PresentationService>{
   const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),compiler=new TransitionCompiler(),executions=new Set<AbortController>(),buttonState=options.buttonState??new MemoryButtonStateStore();
   type PreparedUnlock={plan:FramePlan;startKeys:readonly string[];target:Buffer;revision:number};
-  let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,standby:DeckCanvas|undefined,preparedUnlock:PreparedUnlock|undefined,generation=0,currentGeneration:string|undefined,recoveringGeneration:string|undefined,lifecycle=0,locked=false,closed=false,revision=options.store.state().revision,polling=false;
+  let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,standby:DeckSurface|undefined,preparedUnlock:PreparedUnlock|undefined,generation=0,currentGeneration:string|undefined,recoveringGeneration:string|undefined,lifecycle=0,locked=false,closed=false,revision=options.store.state().revision,polling=false;
   const validStateKeys=()=>new Set(snapshot.document.pages.flatMap(page=>(page.buttons??[]).map(button=>buttonStateKey({documentId:snapshot.document.id,pageId:page.id,buttonId:button.id}))));
   await buttonState.prune(validStateKeys());
   board.update(options.store.records());
@@ -41,7 +42,7 @@ export async function startPresentationService(options:{store:SignalStore;direct
     board.update(options.store.records());const deck=board.page(),page=snapshot.document.pages.find(item=>item.id===deck.viewId)??snapshot.document.pages.find(item=>item.id===snapshot.document.defaultPageId)!;
     return renderer.render(snapshot.document,page,deck,repository.assets,{toggle:(pageId,buttonId)=>buttonState.getToggle({documentId:snapshot.document.id,pageId,buttonId})});
   };
-  const publish=async(trigger:PresentationTrigger,spec=snapshot.document.motion.pageChange,provided?:DeckCanvas)=>{
+  const publish=async(trigger:PresentationTrigger,spec=snapshot.document.motion.pageChange,provided?:DeckSurface)=>{
     if(closed)return;
     gestures.accept({type:'cancel-all',reason:trigger,at:(options.now??Date.now)()});cancelExecutions();
     const target=provided??(trigger==='standby'?await renderer.renderStandby(snapshot.document,repository.assets):await renderLive()),from=canvas??target.png;canvas=target.png;
@@ -50,9 +51,9 @@ export async function startPresentationService(options:{store:SignalStore;direct
     if(trigger!=='standby'){standby=undefined;preparedUnlock=undefined;}
     options.gateway.publish({v:1,type:'presentation',trigger,delivery:'immediate',plan,inputEnabled:!locked});
   };
-  const buildUnlock=async(start:DeckCanvas):Promise<PreparedUnlock>=>{
+  const buildUnlock=async(start:DeckSurface):Promise<PreparedUnlock>=>{
     const preparedRevision=revision,target=await renderLive(),plan=await compiler.compile(start.png,target.png,snapshot.document.motion.unlock,`g${++generation}`);
-    return{plan,startKeys:start.keys,target:target.png,revision:preparedRevision};
+    return{plan,startKeys:start.keyPngs.map(bytes=>`data:image/png;base64,${bytes.toString('base64')}`),target:target.png,revision:preparedRevision};
   };
   const prepareWhileLocked=async(epoch:number)=>{
     const start=standby??await renderer.renderStandby(snapshot.document,repository.assets),prepared=await buildUnlock(start);

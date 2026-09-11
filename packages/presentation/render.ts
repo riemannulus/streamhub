@@ -1,13 +1,13 @@
 import sharp from 'sharp';
+import {createHash} from 'node:crypto';
 import type {StudioAppearance,StudioDocument,StudioPage} from '../studio/document';
 import type {DeckPage} from '../streamdeck';
 import {renderKey} from '../streamdeck/render';
 import {composeButton} from './button-compositor';
 import {extractKeyPngs,keyViewport} from './geometry';
+import type {DeckSurface} from './backend';
 
 export type AssetReader={read(id:string):Promise<Uint8Array>};
-export type DeckCanvas={png:Buffer;keys:string[]};
-const uri=(bytes:Uint8Array)=>`data:image/png;base64,${Buffer.from(bytes).toString('base64')}`;
 
 export async function renderStudioBackground(appearance:StudioAppearance|undefined,assets:AssetReader):Promise<Buffer>{
   const color=appearance?.color??'#000000';
@@ -17,9 +17,9 @@ export async function renderStudioBackground(appearance:StudioAppearance|undefin
 }
 
 export class DeckVisualRenderer{
-  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckCanvas>{return this.renderAppearance(page.appearance,deckPage,page,assets,state);}
-  async renderStandby(document:StudioDocument,assets:AssetReader):Promise<DeckCanvas>{const empty:DeckPage={index:0,pageCount:1,epoch:0,keys:Array.from({length:15},(_,index)=>({type:'empty',index}))};return this.renderAppearance(document.standby,empty,undefined,assets);}
-  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckCanvas>{
+  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckSurface>{return this.renderAppearance(page.appearance,deckPage,page,assets,state);}
+  async renderStandby(document:StudioDocument,assets:AssetReader):Promise<DeckSurface>{const empty:DeckPage={index:0,pageCount:1,epoch:0,keys:Array.from({length:15},(_,index)=>({type:'empty',index}))};return this.renderAppearance(document.standby,empty,undefined,assets);}
+  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckSurface>{
     const background=await renderStudioBackground(appearance,assets),crops=await extractKeyPngs(background),overlays:sharp.OverlayOptions[]=[];
     for(const key of deckPage.keys){
       const fixed=page?.buttons?.find(button=>button.index===key.index);let input:Buffer|undefined;
@@ -27,7 +27,7 @@ export class DeckVisualRenderer{
       else if(key.type!=='empty')input=await sharp(await renderKey(key,deckPage),{raw:{width:72,height:72,channels:3}}).ensureAlpha().png().toBuffer();
       if(input)overlays.push({input,left:keyViewport(key.index).left,top:keyViewport(key.index).top});
     }
-    const canvas=await sharp(background).composite(overlays).png().toBuffer(),keys=await extractKeyPngs(canvas);
-    return{png:canvas,keys:keys.map(uri)};
+    const canvas=await sharp(background).composite(overlays).png().toBuffer(),keyPngs=await extractKeyPngs(canvas);
+    return{identity:createHash('sha256').update(canvas).digest('hex'),png:canvas,keyPngs};
   }
 }
