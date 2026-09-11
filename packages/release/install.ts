@@ -10,6 +10,7 @@ type InstallOptions={packageRoot:string;applicationRoot:string;binDirectory:stri
 type InstallResult={installRoot:string;commandPath:string;dataRoot:string};
 type InstallMarker={name:'streamhub-preview';version:string;gitCommit:string};
 export type InstallerArguments={operation:'install'|'uninstall';prefix?:string};
+type InstallerPathInput={arguments:InstallerArguments;packageRoot:string;home:string;commandPath?:string;installedPackage:boolean};
 
 const stat=(path:string)=>{try{return lstatSync(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}};
 const canonical=(path:string)=>{try{return realpathSync(path);}catch{return resolve(path);}};
@@ -24,6 +25,12 @@ export function parseInstallerArguments(argv:string[]):InstallerArguments{
   if(argv.length===1)return{operation};
   if(argv.length!==3||argv[1]!=='--prefix'||!isAbsolute(argv[2]!))throw usage();
   return{operation,prefix:resolve(argv[2]!)};
+}
+
+export function resolveInstallerPaths(input:InstallerPathInput):{applicationRoot:string;binDirectory:string}{
+  if(input.arguments.prefix)return{applicationRoot:join(input.arguments.prefix,'Application Support','Streamhub'),binDirectory:join(input.arguments.prefix,'bin')};
+  if(input.arguments.operation==='uninstall'&&input.installedPackage)return{applicationRoot:dirname(dirname(resolve(input.packageRoot))),binDirectory:dirname(resolve(input.commandPath??join(input.home,'.local','bin','streamhub')))};
+  return{applicationRoot:join(input.home,'Library','Application Support','Streamhub'),binDirectory:join(input.home,'.local','bin')};
 }
 
 function assertLocations(options:InstallOptions,version:string){

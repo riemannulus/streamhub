@@ -3,7 +3,7 @@ import {existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,sym
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createReleaseManifest} from './manifest';
-import {installPreview,parseInstallerArguments,uninstallPreview} from './install';
+import {installPreview,parseInstallerArguments,resolveInstallerPaths,uninstallPreview} from './install';
 
 const fixture=()=>{const root=mkdtempSync(join(tmpdir(),'streamhub preview install ')),packageRoot=join(root,'extracted'),applicationRoot=join(root,'Application Support','Streamhub'),binDirectory=join(root,'.local','bin'),dataRoot=join(applicationRoot,'data');mkdirSync(join(packageRoot,'bin'),{recursive:true});mkdirSync(join(packageRoot,'app'),{recursive:true});mkdirSync(join(packageRoot,'share'),{recursive:true});writeFileSync(join(packageRoot,'bin','streamhub'),'#!/bin/sh\n');writeFileSync(join(packageRoot,'app','cli.js'),'cli');writeFileSync(join(packageRoot,'README.md'),'user');writeFileSync(join(packageRoot,'DEVELOPMENT.md'),'dev');writeFileSync(join(packageRoot,'install.sh'),'install');writeFileSync(join(packageRoot,'uninstall.sh'),'uninstall');writeFileSync(join(packageRoot,'SHA256SUMS'),'hashes');writeFileSync(join(packageRoot,'manifest.json'),JSON.stringify(createReleaseManifest({gitCommit:'a'.repeat(40),builtAt:'2026-09-11T00:00:00.000Z',pluginVersion:'0.2.0.0'})));return{root,packageRoot,applicationRoot,binDirectory,dataRoot,options:{packageRoot,applicationRoot,binDirectory}};};
 
@@ -35,6 +35,12 @@ test('installer arguments allow one absolute smoke prefix only',()=>{
   expect(parseInstallerArguments(['install'])).toEqual({operation:'install'});
   expect(parseInstallerArguments(['uninstall','--prefix','/private/tmp/streamhub-preview'])).toEqual({operation:'uninstall',prefix:'/private/tmp/streamhub-preview'});
   for(const argv of [[],['update'],['install','--prefix','relative'],['install','--prefix'],['install','--bad']])expect(()=>parseInstallerArguments(argv)).toThrow('Usage');
+});
+
+test('installed uninstall derives its application and command roots from the invoked package',()=>{
+  const home='/Users/example',packageRoot='/private/tmp/preview/Application Support/Streamhub/app/0.1.0-preview.1',commandPath='/private/tmp/preview/bin/streamhub';
+  expect(resolveInstallerPaths({arguments:{operation:'uninstall'},packageRoot,home,commandPath,installedPackage:true})).toEqual({applicationRoot:'/private/tmp/preview/Application Support/Streamhub',binDirectory:'/private/tmp/preview/bin'});
+  expect(resolveInstallerPaths({arguments:{operation:'install',prefix:'/private/tmp/custom'},packageRoot:'/archive',home,installedPackage:false})).toEqual({applicationRoot:'/private/tmp/custom/Application Support/Streamhub',binDirectory:'/private/tmp/custom/bin'});
 });
 
 test('invalid manifests are rejected and a missing owned version is a no-op',async()=>{
