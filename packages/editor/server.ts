@@ -13,7 +13,7 @@ import {extractKeyPngs,streamDeckClassicGeometry} from '../presentation/geometry
 import {renderStudioBackground} from '../presentation/render';
 import {composeButton} from '../presentation/button-compositor';
 import {actionCatalog} from '../host/src/key-actions';
-import {AppCatalog,normalizeAppCatalog,normalizePickerResult,pickNativePath,type PathPickerResult} from '../host/src/catalog';
+import {AppCatalog,MacAppIconProvider,normalizeAppCatalog,normalizePickerResult,pickNativePath,type AppIconProvider,type PathPickerResult} from '../host/src/catalog';
 import {IconPackCatalog} from './icon-packs';
 import {normalizeVisualAsset} from '../studio/assets';
 
@@ -33,7 +33,7 @@ class Conflict extends Error {}
 type Client = {session?: SimulatorSession};
 
 /** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
-export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>;iconPacks?:Pick<IconPackCatalog,'packs'|'icons'|'read'>} = {}) {
+export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;appIcons?:Pick<AppIconProvider,'read'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>;iconPacks?:Pick<IconPackCatalog,'packs'|'icons'|'read'>} = {}) {
   readConfig(true);
   const studioDirectory=join(dirname(process.env.STREAMHUB_CONFIG??resolve('.streamhub/config.json')),'studio');
   const repository=new StudioRepository(studioDirectory);
@@ -42,7 +42,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
   const clients = new Set<Bun.ServerWebSocket<Client>>();
   const reports=new Map<string,string>();
-  const appCatalog=options.appCatalog??new AppCatalog(),pickPath=options.pickPath??pickNativePath,iconPacks=options.iconPacks??new IconPackCatalog();
+  const appCatalog=options.appCatalog??new AppCatalog(),appIcons=options.appIcons??new MacAppIconProvider(),pickPath=options.pickPath??pickNativePath,iconPacks=options.iconPacks??new IconPackCatalog();
   let checking:Promise<unknown>|undefined;
   let stopped = false;
   let stopping: Promise<void> | undefined;
@@ -82,6 +82,10 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         if (request.headers.get('x-streamhub-editor') !== token) return json({error:'Forbidden'},403);
         if(url.pathname==='/api/catalog/apps'&&request.method==='GET'){
           try{return json(normalizeAppCatalog(await appCatalog.apps()));}catch{return json({error:'앱 목록을 불러오지 못했습니다.'},500);}
+        }
+        if(url.pathname==='/api/catalog/apps/icon'&&request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);
+          try{const payload=await request.json() as Record<string,unknown>;if(!payload||typeof payload!=='object'||Array.isArray(payload)||Object.keys(payload).length!==1||typeof payload.appId!=='string')throw new Error('Invalid app selection');const app=normalizeAppCatalog(await appCatalog.apps()).find(item=>item.id===payload.appId);if(!app)return json({error:'앱을 찾지 못했습니다.'},404);return json({assetId:await repository.putAsset(await appIcons.read(app))});}catch(error){return json({error:error instanceof Error?error.message:'앱 아이콘을 가져오지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/catalog/actions'&&request.method==='GET'){
           try{return json(actionCatalog(readConfig().actions??{}));}catch{return json({error:'동작 목록을 불러오지 못했습니다.'},500);}

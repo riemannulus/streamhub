@@ -1,10 +1,12 @@
-import {existsSync,readdirSync,readFileSync} from 'node:fs';
-import {basename,join,resolve} from 'node:path';
+import {existsSync,mkdtempSync,readdirSync,readFileSync,realpathSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {basename,join,resolve,sep} from 'node:path';
 import {runBoundedProcess} from '../../actions/system';
 
-export type AppCatalogItem={name:string;bundleId:string;path:string;iconPng?:string};
+export type AppCatalogItem={id:string;name:string;bundleId:string;path:string;iconPng?:string};
 export type PathPickerResult={path:string}|{cancelled:true};
 export type AppCatalogReader=()=>Promise<unknown>;
+export type AppIconProvider={read(app:AppCatalogItem):Promise<Uint8Array>};
 
 const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid app catalog item');return value as Record<string,unknown>;};
 const safeText=(value:unknown,max:number)=>{if(typeof value!=='string'||!value||value.length>max||/[\u0000-\u001f\u007f]/.test(value))throw new Error('Invalid app catalog string');return value;};
@@ -12,18 +14,39 @@ const safeText=(value:unknown,max:number)=>{if(typeof value!=='string'||!value||
 export function normalizeAppCatalog(raw:unknown):AppCatalogItem[]{
   if(!Array.isArray(raw))throw new Error('Invalid app catalog');
   if(raw.length>2000)throw new Error('App catalog exceeds 2,000 items');
-  const bundleIds=new Set<string>(),result:AppCatalogItem[]=[];
+  const ids=new Set<string>(),bundleIds=new Set<string>(),result:AppCatalogItem[]=[];
   for(const item of raw){
-    const value=object(item);if(Object.keys(value).some(key=>!['name','bundleId','path','iconPng'].includes(key)))throw new Error('Unknown app catalog field');
+    const value=object(item);if(Object.keys(value).some(key=>!['id','name','bundleId','path','iconPng'].includes(key)))throw new Error('Unknown app catalog field');
     const name=safeText(value.name,256),bundleId=safeText(value.bundleId,255),path=safeText(value.path,4096);
     if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(bundleId))throw new Error('Invalid app bundle ID');
     if(!path.startsWith('/'))throw new Error('App path must be absolute');
     if(bundleIds.has(bundleId))throw new Error(`Duplicate app bundle ID: ${bundleId}`);bundleIds.add(bundleId);
+    const id=value.id===undefined?`bundle:${bundleId}`:safeText(value.id,512);if(!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(id))throw new Error('Invalid app catalog ID');if(ids.has(id))throw new Error(`Duplicate app catalog ID: ${id}`);ids.add(id);
     let iconPng:string|undefined;
     if(value.iconPng!==undefined){iconPng=safeText(value.iconPng,700000);if(!/^[A-Za-z0-9+/]*={0,2}$/.test(iconPng)||iconPng.length%4!==0||Buffer.from(iconPng,'base64').byteLength>512*1024)throw new Error('Invalid app icon');}
-    result.push({name,bundleId,path,...(iconPng===undefined?{}:{iconPng})});
+    result.push({id,name,bundleId,path,...(iconPng===undefined?{}:{iconPng})});
   }
   return result.sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.bundleId.localeCompare(b.bundleId));
+}
+
+type MacAppIconOptions={platform?:string;convert?:(path:string)=>Promise<Uint8Array>};
+const plistString=(contents:string,key:string)=>{const match=new RegExp(`<key>${key}</key>\\s*<string>([^<]+)</string>`).exec(contents);return match?decodeXml(match[1]!.trim()):undefined;};
+async function convertMacIcon(path:string):Promise<Uint8Array>{
+  const directory=mkdtempSync(join(tmpdir(),'streamhub-app-icon-')),output=join(directory,'icon.png');
+  try{await runBoundedProcess({argv:['/usr/bin/sips','-s','format','png',path,'--out',output],timeoutMs:10000,maxOutputBytes:16384});return new Uint8Array(readFileSync(output));}
+  finally{rmSync(directory,{recursive:true,force:true});}
+}
+export class MacAppIconProvider implements AppIconProvider{
+  private readonly platform:string;private readonly convert:(path:string)=>Promise<Uint8Array>;
+  constructor(options:MacAppIconOptions={}){this.platform=options.platform??process.platform;this.convert=options.convert??convertMacIcon;}
+  async read(app:AppCatalogItem):Promise<Uint8Array>{
+    if(this.platform!=='darwin')throw new Error('App icons are not supported on this platform');
+    const resources=realpathSync(join(app.path,'Contents','Resources')),plist=readFileSync(join(app.path,'Contents','Info.plist'),'utf8'),raw=plistString(plist,'CFBundleIconFile');
+    if(!raw||basename(raw)!==raw)throw new Error('App icon is not available');
+    const filename=raw.toLowerCase().endsWith('.icns')?raw:`${raw}.icns`,path=realpathSync(join(resources,filename));
+    if(path!==resources&&!path.startsWith(`${resources}${sep}`))throw new Error('App icon path escapes its bundle');
+    return this.convert(path);
+  }
 }
 
 const decodeXml=(value:string)=>value.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
@@ -40,7 +63,7 @@ export async function readMacAppCatalog():Promise<AppCatalogItem[]>{
     let plist:string;try{plist=readFileSync(join(path,'Contents/Info.plist'),'utf8');}catch{continue;}
     const match=/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist);if(!match)continue;
     const bundleId=decodeXml(match[1]!);if(seen.has(bundleId))continue;seen.add(bundleId);
-    items.push({name:basename(path,'.app'),bundleId,path});if(items.length===2000)break;
+    items.push({id:`bundle:${bundleId}`,name:basename(path,'.app'),bundleId,path});if(items.length===2000)break;
   }
   return normalizeAppCatalog(items);
 }

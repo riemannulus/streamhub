@@ -13,7 +13,8 @@ export class StudioState{
   actions:RegisteredActionItem[]=[];
   runtimeStatus:Bootstrap['runtimeStatus'];
   private draftQueue:Promise<void>=Promise.resolve();
-  private constructor(private readonly request:typeof fetch,private readonly token:string,private version:string,readonly geometry:Geometry,bootstrap:Bootstrap){this.model=new StudioModel(bootstrap.draft??bootstrap.snapshot.document);this.runtimeStatus=bootstrap.runtimeStatus;}
+  private readonly request:typeof fetch;
+  private constructor(request:typeof fetch,private readonly token:string,private version:string,readonly geometry:Geometry,bootstrap:Bootstrap){this.request=request.bind(globalThis);this.model=new StudioModel(bootstrap.draft??bootstrap.snapshot.document);this.runtimeStatus=bootstrap.runtimeStatus;}
   static async connect(request:typeof fetch=fetch):Promise<StudioState>{
     const response=await request('/api/bootstrap');const bootstrap=await response.json() as Bootstrap;if(!response.ok)throw new Error('Studio를 불러오지 못했습니다.');
     const state=new StudioState(request,bootstrap.token,bootstrap.snapshot.version,bootstrap.geometry,bootstrap);
@@ -29,6 +30,7 @@ export class StudioState{
     if(!response.ok)throw new Error(body.error??'장치에 적용하지 못했습니다.');this.version=body.version!;this.runtimeStatus=body.runtimeStatus??this.runtimeStatus;this.model.markApplied();
   }
   async upload(file:File):Promise<string>{const response=await this.request('/api/assets',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':file.type||'application/octet-stream'},body:file}),body=await response.json() as {assetId?:string;error?:string};if(!response.ok)throw new Error(body.error??'이미지를 저장하지 못했습니다.');return body.assetId!;}
+  async appIcon(appId:string):Promise<string>{const response=await this.request('/api/catalog/apps/icon',{method:'POST',headers:{'X-Streamhub-Editor':this.token,'Content-Type':'application/json'},body:JSON.stringify({appId})}),body=await response.json() as {assetId?:string;error?:string};if(!response.ok||!body.assetId)throw new Error(body.error??'앱 아이콘을 가져오지 못했습니다.');return body.assetId;}
   async iconPacks():Promise<IconPackSummary[]>{const response=await this.request('/api/icon-packs',{headers:{'X-Streamhub-Editor':this.token}}),body=await response.json() as IconPackSummary[]&{error?:string};if(!response.ok)throw new Error(body.error??'아이콘팩 목록을 불러오지 못했습니다.');return body;}
   async iconPackIcons(packId:string,query=''):Promise<IconPackIcon[]>{const response=await this.request(`/api/icon-packs/${encodeURIComponent(packId)}/icons?q=${encodeURIComponent(query)}`,{headers:{'X-Streamhub-Editor':this.token}}),body=await response.json() as IconPackIcon[]&{error?:string};if(!response.ok)throw new Error(body.error??'아이콘 목록을 불러오지 못했습니다.');return body;}
   async iconPreview(packId:string,iconId:string):Promise<Blob>{const response=await this.request(`/api/icon-packs/${encodeURIComponent(packId)}/icons/${encodeURIComponent(iconId)}/preview`,{headers:{'X-Streamhub-Editor':this.token}});if(!response.ok)throw new Error('아이콘 미리보기를 불러오지 못했습니다.');return response.blob();}

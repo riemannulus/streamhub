@@ -140,7 +140,7 @@ test('catalog and native picker APIs expose only bounded local choices',async()=
   const picks:string[]=[],config={...baseConfig(),actions:{build:{exec:['/usr/bin/true','{target}'],args:{target:'[a-z]+'},sources:['demo']}}};
   const {url,bootstrap}=await setup({appCatalog:{apps:async()=>[{name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'}]},pickPath:async(kind:'file'|'folder')=>{picks.push(kind);return kind==='file'?{path:'/tmp/file.txt'}:{cancelled:true};}},config);
   const headers={'X-Streamhub-Editor':bootstrap.token};
-  expect(await (await fetch(`${url}/api/catalog/apps`,{headers})).json()).toEqual([{name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'}]);
+  expect(await (await fetch(`${url}/api/catalog/apps`,{headers})).json()).toEqual([{id:'bundle:org.mozilla.firefox',name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'}]);
   expect(await (await fetch(`${url}/api/catalog/actions`,{headers})).json()).toEqual([{name:'build',args:['target']}]);
   expect(JSON.stringify(await (await fetch(`${url}/api/catalog/actions`,{headers})).json())).not.toContain(config.adminToken);
   expect((await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({kind:'file'})})).status).toBe(403);
@@ -148,6 +148,23 @@ test('catalog and native picker APIs expose only bounded local choices',async()=
   const cancelled=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'folder'})});expect(await cancelled.json()).toEqual({cancelled:true});
   const injected=await fetch(`${url}/api/picker/path`,{method:'POST',headers:{...headers,Origin:url,'Content-Type':'application/json'},body:JSON.stringify({kind:'file',path:'/etc/passwd'})});expect(injected.status).toBe(400);
   expect(picks).toEqual(['file','folder']);
+});
+
+test('app icon API resolves an opaque catalog id and stores a normalized Studio asset',async()=>{
+  const png=await sharp({create:{width:32,height:32,channels:4,background:{r:255,g:80,b:20,alpha:0.7}}}).png().toBuffer();
+  const app={id:'bundle:org.mozilla.firefox',name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'};
+  const reads:string[]=[];
+  const {url,bootstrap}=await setup({
+    appCatalog:{apps:async()=>[app]},
+    appIcons:{read:async(selected:{id:string})=>{reads.push(selected.id);return new Uint8Array(png);}},
+  } as never);
+  const response=await fetch(`${url}/api/catalog/apps/icon`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({appId:app.id})});
+  expect(response.status).toBe(200);
+  const {assetId}=await response.json() as {assetId:string};
+  expect(assetId).toMatch(/^[a-f0-9]{64}$/);
+  expect(reads).toEqual([app.id]);
+  expect(await sharp(await (await fetch(`${url}/api/assets/${assetId}`)).arrayBuffer()).metadata()).toMatchObject({format:'png',width:32,height:32});
+  expect((await fetch(`${url}/api/catalog/apps/icon`,{method:'POST',headers:{'X-Streamhub-Editor':bootstrap.token,'Content-Type':'application/json'},body:JSON.stringify({appId:'bundle:missing'})})).status).toBe(404);
 });
 
 test('icon pack APIs search, preview and import an installed icon without exposing its path',async()=>{

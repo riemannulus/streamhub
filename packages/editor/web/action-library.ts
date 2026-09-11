@@ -1,4 +1,5 @@
 import {singlePressBehavior,type ButtonAction,type ButtonDefinition} from '../../studio/document';
+import type {AppCatalogItem} from '../../host/src/catalog';
 
 export type ActionGroup='기본'|'탐색'|'데이터';
 export type AdvancedActionType='multi-action'|'toggle-action'|'double-press'|'hold-action';
@@ -34,10 +35,10 @@ export function filteredActions(query:string):ActionType[]{
   return ACTION_ITEMS.filter(item=>!needle||`${item.label} ${item.type}`.toLocaleLowerCase().includes(needle)).map(item=>item.type);
 }
 
-export function createButtonForAction(type:ButtonAction['type'],index:number,options:{pageId:string;appBundleId?:string;registered?:{name:string;args:string[]}[]}):ButtonDefinition{
+export function createButtonForAction(type:ButtonAction['type'],index:number,options:{pageId:string;appBundleId?:string;app?:AppCatalogItem;iconAssetId?:string;registered?:{name:string;args:string[]}[]}):ButtonDefinition{
   const item=ACTION_ITEMS.find(item=>item.type===type)!;
   let action:ButtonAction;
-  if(type==='open-app')action={type,bundleId:options.appBundleId??'com.apple.Finder'};
+  if(type==='open-app')action={type,bundleId:options.app?.bundleId??options.appBundleId??'com.apple.Finder'};
   else if(type==='open-path')action={type,path:'/Applications'};
   else if(type==='open-url')action={type,url:'https://example.com/'};
   else if(type==='hotkey')action={type,keys:['command','k']};
@@ -46,7 +47,8 @@ export function createButtonForAction(type:ButtonAction['type'],index:number,opt
   else if(type==='registered'){const command=options.registered?.[0];action=command?{type,name:command.name,args:Object.fromEntries(command.args.map(key=>[key,'']))}:{type:'none'};}
   else if(type==='go-to-page')action={type,pageId:options.pageId};
   else action={type} as ButtonAction;
-  return{id:crypto.randomUUID(),index,behavior:singlePressBehavior(action),appearance:{contentMode:'label-only',label:{text:item.label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
+  const icon=type==='open-app'&&options.iconAssetId?{assetId:options.iconAssetId,fit:'contain' as const}:undefined,label=type==='open-app'&&options.app?options.app.name:item.label;
+  return{id:crypto.randomUUID(),index,behavior:singlePressBehavior(action),appearance:{contentMode:icon?'icon-and-label':'label-only',...(icon?{icon}:{}),label:{text:label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
 }
 
 export function renderActionLibrary(container:HTMLElement,query:string,onChoose:(type:ActionType)=>void):void{
