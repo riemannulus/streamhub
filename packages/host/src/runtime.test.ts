@@ -1,9 +1,14 @@
 import { expect, test } from 'bun:test';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import type {DeckBackend,DeckBackendKind} from '../../presentation/backend';
 import { startHost, type HostDependencies } from './runtime';
 import { SignalStore } from './store';
 import type { Config } from './config';
 
 const config:Config={port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'off'}};
+const fakeBackend=(mode:DeckBackendKind,state:'ready'|'unavailable'='ready'):DeckBackend=>({async prepare(request){return{backend:mode,generation:request.generation,token:request.generation};},async present(){},status:()=>({mode,state,connected:state==='ready'}),async stop(){}});
 const deferred=<T>()=>{let resolve!:(value:T)=>void;let reject!:(error:unknown)=>void;const promise=new Promise<T>((done,fail)=>{resolve=done;reject=fail;});return{promise,resolve,reject};};
 function resources(){
   const calls:string[]=[];
@@ -81,4 +86,23 @@ test('abort preserves pending display cleanup failure and still closes server an
   await expect(starting).rejects.toBeInstanceOf(AggregateError);
   expect(r.calls).toContain('server-stop');
   expect(r.calls.at(-1)).toBe('store-close');
+});
+
+test('runtime constructs only the selected canonical backend',async()=>{
+  const directory=mkdtempSync(join(tmpdir(),'streamhub-runtime-mode-')),tokenFile=join(directory,'plugin-token');writeFileSync(tokenFile,'x'.repeat(64),{mode:0o600});
+  try{
+    for(const mode of ['hid','plugin','off'] as const){
+      const r=resources(),calls={hid:0,plugin:0};
+      Object.assign(r.dependencies,{hidBackend:async()=>{calls.hid++;return fakeBackend('hid');},pluginBackend:async()=>{calls.plugin++;return fakeBackend('plugin');},sessionMonitor:async()=>({stop:async()=>{}}),contextMonitor:async()=>({stop:async()=>{}})});
+      const display=mode==='plugin'?{mode,plugin:{port:31417,tokenFile}}:{mode};
+      const host=await startHost({...config,display},directory,{dependencies:r.dependencies});
+      expect(calls).toEqual(mode==='hid'?{hid:1,plugin:0}:mode==='plugin'?{hid:0,plugin:1}:{hid:0,plugin:0});
+      await host.stop();
+    }
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
+test('an unavailable selected backend never constructs the other owner',async()=>{
+  const directory=mkdtempSync(join(tmpdir(),'streamhub-runtime-unavailable-'));try{const r=resources(),calls={hid:0,plugin:0};Object.assign(r.dependencies,{hidBackend:async()=>{calls.hid++;return fakeBackend('hid','unavailable');},pluginBackend:async()=>{calls.plugin++;return fakeBackend('plugin');},sessionMonitor:async()=>({stop:async()=>{}}),contextMonitor:async()=>({stop:async()=>{}})});
+  const host=await startHost({...config,display:{mode:'hid'}},directory,{dependencies:r.dependencies});expect(calls).toEqual({hid:1,plugin:0});await host.stop();}finally{rmSync(directory,{recursive:true,force:true});}
 });

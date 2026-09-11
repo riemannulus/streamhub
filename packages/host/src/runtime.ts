@@ -10,9 +10,10 @@ import { SignalStore } from './store';
 import type { PageConfig } from '../../streamdeck/pages';
 import type {DeckBackend} from '../../presentation/backend';
 import {startPluginBackend} from './plugin-backend';
+import {startHidBackend} from './hid-backend';
 import {startPresentationCoordinator,type PresentationCoordinator} from './presentation';
-import {startSessionMonitor} from './session-monitor';
-import {startAppContextMonitor} from './app-context';
+import {startSessionMonitor,type SessionState} from './session-monitor';
+import {startAppContextMonitor,type ApplicationContext} from './app-context';
 import {FileButtonStateStore} from './button-state';
 
 type Collector = NonNullable<Config['collectors']>[number];
@@ -22,10 +23,15 @@ export type HostDependencies = {
   openStore(path: string): SignalStore;
   serve(options: ServerOptions): HostServer;
   display(store: SignalStore, directory: string, options: { signal: AbortSignal; board?: PageConfig; execute:(effect:ButtonEffect,signal?:AbortSignal)=>Promise<void> }): Promise<HostDisplay>;
+  hidBackend(options:{events:{key(event:{index:number;phase:'down'|'up';generation:string}):void;ready():void};onError(error:unknown):void}):Promise<DeckBackend>;
+  pluginBackend(options:{port:number;token:string;events:{key(event:{index:number;phase:'down'|'up';generation:string}):void;ready():void};onError(error:unknown):void}):Promise<DeckBackend>;
+  sessionMonitor(callback:(state:SessionState)=>void,options:{cacheDir:string}):Promise<{stop():Promise<void>}>;
+  contextMonitor(callback:(context:ApplicationContext)=>void,options:{cacheDir:string}):Promise<{stop():Promise<void>}>;
   collect(collector: Collector): Promise<Membership>;
 };
 export type HostOptions = { signal?: AbortSignal; onError?: (error: unknown) => void; dependencies?: Partial<HostDependencies> };
 export type HostRuntime = { url: URL; stop(): Promise<void> };
+export type StudioDisplayStatus={configuredMode:'off'|'hid'|'plugin';activeMode:'off'|'hid'|'plugin';state:'off'|'connecting'|'ready'|'recovering'|'unavailable';restartRequired:boolean;message?:string};
 const aborted = () => new DOMException('Host startup was cancelled', 'AbortError');
 
 function untilAborted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -51,7 +57,7 @@ export async function startHost(input: Config, directory: string, options: HostO
   let server: HostServer | undefined;
   let display: HostDisplay | undefined;
   let pendingDisplay: Promise<HostDisplay> | undefined;
-  let pluginBackend:DeckBackend|undefined;
+  let backend:DeckBackend|undefined;
   let presentation:PresentationCoordinator|undefined;
   let presentationMonitor:{stop():Promise<void>}|undefined;
   let startupFailure:unknown;
@@ -71,7 +77,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       // handle has been acquired and disposed, rather than orphaning it on exit.
       let pendingFailure:unknown;
       if(pendingDisplay){try{display=await pendingDisplay;}catch(error){pendingFailure=error;}}
-      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>pluginBackend?.stop())]);
+      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(() => display?.stop()),Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>backend?.stop())]);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => server?.stop(true))]));
       results.push(...await Promise.allSettled([...jobs]));
       results.push(...await Promise.allSettled([Promise.resolve().then(() => store?.close())]));
@@ -93,15 +99,20 @@ export async function startHost(input: Config, directory: string, options: HostO
     store = (dependencies.openStore ?? (path => new SignalStore(path)))(join(directory, 'state.sqlite'));
     checkCancelled();
     const reconciler = new Reconciler(store, actions, Object.fromEntries(Object.entries(config.sources).map(([source, value]) => [source, value.allowedHosts ?? []])));
-    if(config.streamdeckPlugin?.enabled){
-      const tokenStat=statSync(config.streamdeckPlugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(config.streamdeckPlugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
-      pluginBackend=await startPluginBackend({port:config.streamdeckPlugin.port,token,onError:report,events:{key:event=>{void presentation?.key(event).catch(report);},ready:()=>{void presentation?.backendReady().catch(report);}}});
-      presentation=await startPresentationCoordinator({store,directory:join(directory,'studio'),backend:pluginBackend,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
-      const sessionMonitor=await startSessionMonitor(state=>{void presentation?.locked(!state.active).catch(report);},{cacheDir:join(directory,'native')});
-      const contextMonitor=await startAppContextMonitor(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
+    const useLegacyDisplay=config.display.mode==='hid'&&!!dependencies.display&&!dependencies.hidBackend;
+    if(config.display.mode!=='off'&&!useLegacyDisplay){
+      const events={key:(event:{index:number;phase:'down'|'up';generation:string})=>{void presentation?.key(event).catch(report);},ready:()=>{void presentation?.backendReady().catch(report);}};
+      if(config.display.mode==='plugin'){
+        const plugin=config.display.plugin!;const tokenStat=statSync(plugin.tokenFile);if(!tokenStat.isFile()||(tokenStat.mode&0o077)!==0)throw new Error('Plugin token file must be private');const token=readFileSync(plugin.tokenFile,'utf8').trim();if(token.length<32)throw new Error('Plugin token must be at least 32 characters');
+        backend=await(dependencies.pluginBackend??startPluginBackend)({port:plugin.port,token,onError:report,events});
+      }else backend=await(dependencies.hidBackend??startHidBackend)({onError:report,events});
+      presentation=await startPresentationCoordinator({store,directory:join(directory,'studio'),backend,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
+      const sessionMonitor=await(dependencies.sessionMonitor??startSessionMonitor)(state=>{void presentation?.locked(!state.active).catch(report);},{cacheDir:join(directory,'native')});
+      const contextMonitor=await(dependencies.contextMonitor??startAppContextMonitor)(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
       presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};
     }
-    server = (dependencies.serve ?? startServer)({ store, port: config.port, adminToken: config.adminToken, sources: config.sources, actions, health: () => reconciler.health(), display: () => presentation?.status()??display?.status(),...(presentation?{studio:presentation}:{}) });
+    const publicDisplay=():StudioDisplayStatus=>{if(config.display.mode==='off')return{configuredMode:'off',activeMode:'off',state:'off',restartRequired:false};const status=presentation?.status()??backend?.status();return{configuredMode:config.display.mode,activeMode:config.display.mode,state:status?.state??'connecting',restartRequired:false,...(status?.message?{message:status.message}:{})};};
+    server = (dependencies.serve ?? startServer)({ store, port: config.port, adminToken: config.adminToken, sources: config.sources, actions, health: () => reconciler.health(), display: () => presentation?publicDisplay():display?.status()??publicDisplay(),...(presentation?{studio:{snapshot:()=>presentation!.snapshot(),apply:(document,expectedVersion)=>presentation!.apply(document,expectedVersion),status:publicDisplay}}:{}) });
     checkCancelled();
     for (const { collector, runner } of collectors) {
       const tick = () => {
@@ -121,7 +132,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       checkCancelled();
       timers.push(setInterval(tick, collector.intervalMs));
     }
-    if (config.streamdeck?.enabled) {
+    if (useLegacyDisplay) {
       const factory = dependencies.display ?? (async (store, directory, options) => {
         const module = await import('./display');
         return module.startDisplay(store, directory, options);
