@@ -2,7 +2,8 @@ import type {ButtonEffect} from '../../streamdeck';
 import {PageBoard,studioDocumentToPageConfig,type PageContext} from '../../streamdeck/pages';
 import {createGestureRecognizer,type Gesture} from '../../streamdeck/gestures';
 import type {PluginToRuntimeMessage,PresentationTrigger,RuntimeToPluginMessage} from '../../presentation/protocol';
-import {DeckVisualRenderer} from '../../presentation/render';
+import {DeckVisualRenderer,type DeckCanvas} from '../../presentation/render';
+import type {FramePlan} from '../../presentation/playback';
 import {TransitionCompiler} from '../../presentation/transitions';
 import {StudioRepository,type StudioSnapshot} from '../../studio/repository';
 import {primaryButtonAction,type ActionProgram,type ButtonAction,type ButtonDefinition,type StudioDocument} from '../../studio/document';
@@ -25,7 +26,8 @@ function publicFailure(error:unknown):string{
 
 export async function startPresentationService(options:{store:SignalStore;directory:string;gateway:Gateway;execute(effect:ButtonEffect,signal?:AbortSignal):Promise<void>;buttonState?:ButtonStateStore;now?:()=>number;schedule?:(delayMs:number,callback:()=>void)=>{cancel():void};sleep?:ProgramContext['sleep']}):Promise<PresentationService>{
   const repository=new StudioRepository(options.directory),renderer=new DeckVisualRenderer(),compiler=new TransitionCompiler(),executions=new Set<AbortController>(),buttonState=options.buttonState??new MemoryButtonStateStore();
-  let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,generation=0,currentGeneration:string|undefined,locked=false,closed=false,revision=options.store.state().revision,polling=false;
+  type PreparedUnlock={plan:FramePlan;startKeys:readonly string[];target:Buffer;revision:number};
+  let snapshot=repository.snapshot(),board=new PageBoard(studioDocumentToPageConfig(snapshot.document)),canvas:Buffer|undefined,standby:DeckCanvas|undefined,preparedUnlock:PreparedUnlock|undefined,generation=0,currentGeneration:string|undefined,recoveringGeneration:string|undefined,lifecycle=0,locked=false,closed=false,revision=options.store.state().revision,polling=false;
   const validStateKeys=()=>new Set(snapshot.document.pages.flatMap(page=>(page.buttons??[]).map(button=>buttonStateKey({documentId:snapshot.document.id,pageId:page.id,buttonId:button.id}))));
   await buttonState.prune(validStateKeys());
   board.update(options.store.records());
@@ -39,12 +41,24 @@ export async function startPresentationService(options:{store:SignalStore;direct
     board.update(options.store.records());const deck=board.page(),page=snapshot.document.pages.find(item=>item.id===deck.viewId)??snapshot.document.pages.find(item=>item.id===snapshot.document.defaultPageId)!;
     return renderer.render(snapshot.document,page,deck,repository.assets,{toggle:(pageId,buttonId)=>buttonState.getToggle({documentId:snapshot.document.id,pageId,buttonId})});
   };
-  const publish=async(trigger:PresentationTrigger,spec=snapshot.document.motion.pageChange)=>{
+  const publish=async(trigger:PresentationTrigger,spec=snapshot.document.motion.pageChange,provided?:DeckCanvas)=>{
     if(closed)return;
     gestures.accept({type:'cancel-all',reason:trigger,at:(options.now??Date.now)()});cancelExecutions();
-    const target=trigger==='standby'?await renderer.renderStandby(snapshot.document,repository.assets):await renderLive(),from=canvas??target.png;canvas=target.png;
+    const target=provided??(trigger==='standby'?await renderer.renderStandby(snapshot.document,repository.assets):await renderLive()),from=canvas??target.png;canvas=target.png;
     const plan=await compiler.compile(from,target.png,trigger==='initial'||trigger==='refresh'||trigger==='standby'?{type:'none',durationMs:0}:spec,`g${++generation}`);
-    currentGeneration=plan.generation;options.gateway.publish({v:1,type:'presentation',trigger,plan,inputEnabled:!locked});
+    currentGeneration=plan.generation;recoveringGeneration=undefined;
+    if(trigger!=='standby'){standby=undefined;preparedUnlock=undefined;}
+    options.gateway.publish({v:1,type:'presentation',trigger,delivery:'immediate',plan,inputEnabled:!locked});
+  };
+  const buildUnlock=async(start:DeckCanvas):Promise<PreparedUnlock>=>{
+    const preparedRevision=revision,target=await renderLive(),plan=await compiler.compile(start.png,target.png,snapshot.document.motion.unlock,`g${++generation}`);
+    return{plan,startKeys:start.keys,target:target.png,revision:preparedRevision};
+  };
+  const prepareWhileLocked=async(epoch:number)=>{
+    const start=standby??await renderer.renderStandby(snapshot.document,repository.assets),prepared=await buildUnlock(start);
+    if(closed||!locked||epoch!==lifecycle)return;
+    standby=start;preparedUnlock=prepared;
+    options.gateway.publish({v:1,type:'presentation',trigger:'unlock',delivery:'prepare',plan:prepared.plan,startKeys:prepared.startKeys,inputEnabled:false});
   };
   const execute=async(intent:Extract<ReturnType<PageBoard['up']>,{type:'button-effect'|'effect'}>)=>{
     const controller=new AbortController();executions.add(controller);
@@ -80,15 +94,29 @@ export async function startPresentationService(options:{store:SignalStore;direct
   });
   const timer=setInterval(()=>{
     if(closed||polling)return;const next=options.store.state().revision;if(next===revision)return;revision=next;board.update(options.store.records());
-    if(!locked){polling=true;void publish('refresh').finally(()=>{polling=false;});}
+    polling=true;const task=locked?prepareWhileLocked(lifecycle):publish('refresh');void task.finally(()=>{polling=false;});
   },100);
   const service:PresentationService={
     async message(message){
       if(closed)return;
       if(message.type==='lock'){
-        locked=message.locked;board.cancelInput();gestures.accept({type:'cancel-all',reason:'lock',at:(options.now??Date.now)()});if(locked)cancelExecutions();await publish(locked?'standby':'unlock',snapshot.document.motion.unlock);return;
+        if(locked===message.locked)return;
+        locked=message.locked;const epoch=++lifecycle;board.cancelInput();gestures.accept({type:'cancel-all',reason:'lock',at:(options.now??Date.now)()});
+        if(locked){
+          cancelExecutions();preparedUnlock=undefined;recoveringGeneration=undefined;
+          const target=await renderer.renderStandby(snapshot.document,repository.assets);if(closed||!locked||epoch!==lifecycle)return;
+          standby=target;await publish('standby',snapshot.document.motion.unlock,target);if(closed||!locked||epoch!==lifecycle)return;
+          await prepareWhileLocked(epoch);return;
+        }
+        const next=options.store.state().revision;if(next!==revision){revision=next;board.update(options.store.records());}
+        const start=standby??await renderer.renderStandby(snapshot.document,repository.assets);
+        const prepared=preparedUnlock?.revision===revision?preparedUnlock:await buildUnlock(start);
+        if(closed||locked||epoch!==lifecycle)return;
+        canvas=prepared.target;currentGeneration=prepared.plan.generation;recoveringGeneration=prepared.plan.generation;preparedUnlock=prepared;
+        options.gateway.publish({v:1,type:'presentation',trigger:'unlock',delivery:'resume',plan:prepared.plan,startKeys:prepared.startKeys,inputEnabled:true});return;
       }
-      if(message.type==='cells-ready'){await publish('reconnect',snapshot.document.motion.reconnect);return;}
+      if(message.type==='frame-sent'){if(message.generation===recoveringGeneration&&message.frame===preparedUnlock!.plan.frames.length-1)recoveringGeneration=undefined;return;}
+      if(message.type==='cells-ready'){if(locked||recoveringGeneration)return;await publish('reconnect',snapshot.document.motion.reconnect);return;}
       if(message.type!=='key'||message.generation!==currentGeneration||locked)return;
       const fixed=currentButton(message.index).button;
       if(fixed){immediateGesture=undefined;gestures.accept({type:message.phase,key:message.index,bindingRevision:generation,at:(options.now??Date.now)()});const task=immediateGesture;if(task)await task;return;}

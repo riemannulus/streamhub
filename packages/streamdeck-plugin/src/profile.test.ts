@@ -1,5 +1,6 @@
 import {describe,expect,test} from 'bun:test';
 import {join} from 'node:path';
+import sharp from 'sharp';
 
 const pluginRoot=join(import.meta.dir,'..');
 const profile=join(pluginRoot,'com.streamhub.studio.sdPlugin','profiles','Streamhub.streamDeckProfile');
@@ -28,5 +29,12 @@ describe('bundled Stream Deck profile',()=>{
     });
     expect(Object.keys(manifest.Actions)).toHaveLength(15);
     expect(Object.values(manifest.Actions).every((action:any)=>action.UUID==='com.streamhub.studio.canvas-cell')).toBeTrue();
+  });
+
+  test('uses a neutral black fallback key while dynamic images are warming',async()=>{
+    const generated=Bun.spawnSync(['bun','scripts/generate-assets.ts'],{cwd:pluginRoot});
+    expect(generated.exitCode).toBe(0);
+    const pixels=await sharp(join(pluginRoot,'com.streamhub.studio.sdPlugin','imgs','key.png')).removeAlpha().raw().toBuffer();
+    expect(pixels.every(channel=>channel===0)).toBe(true);
   });
 });

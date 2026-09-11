@@ -15515,17 +15515,19 @@ var gen = (x) => {
     throw new Error("Invalid generation");
   return x;
 };
+var image = (value, format2 = "any") => typeof value === "string" && new RegExp(`^data:image\\/${format2 === "png" ? "png" : "(?:png|jpeg)"};base64,[A-Za-z0-9+/]+=*$`).test(value) && value.length <= 512000;
+var keys = (value, format2 = "any") => Array.isArray(value) && value.length === 15 && value.every((key) => image(key, format2));
 function plan(raw) {
   const p = object2(raw);
   exact(p, ["generation", "frames"]);
   const generation = gen(p.generation);
-  if (!Array.isArray(p.frames) || !p.frames.length || p.frames.length > 12)
+  if (!Array.isArray(p.frames) || !p.frames.length || p.frames.length > 15)
     throw new Error("Invalid frames");
   let prior = -1;
   const frames = p.frames.map((rawFrame, i) => {
     const f = object2(rawFrame);
     exact(f, ["index", "offsetMs", "keys"]);
-    if (f.index !== i || !Number.isFinite(f.offsetMs) || f.offsetMs < 0 || f.offsetMs <= prior || !Array.isArray(f.keys) || f.keys.length !== 15 || f.keys.some((k) => typeof k !== "string" || !/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(k) || k.length > 512000))
+    if (f.index !== i || !Number.isFinite(f.offsetMs) || f.offsetMs < 0 || f.offsetMs <= prior || !keys(f.keys))
       throw new Error("Invalid frame");
     prior = f.offsetMs;
     return { index: i, offsetMs: prior, keys: f.keys };
@@ -15537,10 +15539,15 @@ function parseRuntimeMessage(raw) {
   if (x.v !== 1)
     throw new Error("Unsupported protocol version");
   if (x.type === "presentation") {
-    exact(x, ["v", "type", "trigger", "plan", "inputEnabled"]);
-    if (!["initial", "page", "unlock", "reconnect", "refresh", "standby"].includes(x.trigger) || typeof x.inputEnabled !== "boolean")
+    exact(x, ["v", "type", "trigger", "delivery", "plan", "inputEnabled", "startKeys"]);
+    const delivery = x.delivery === undefined ? "immediate" : x.delivery;
+    if (!["initial", "page", "unlock", "reconnect", "refresh", "standby"].includes(x.trigger) || !["immediate", "prepare", "resume"].includes(delivery) || typeof x.inputEnabled !== "boolean")
       throw new Error("Invalid presentation");
-    return { v: 1, type: "presentation", trigger: x.trigger, plan: plan(x.plan), inputEnabled: x.inputEnabled };
+    if (delivery !== "immediate" && (x.trigger !== "unlock" || !keys(x.startKeys, "png")))
+      throw new Error("Invalid prepared presentation");
+    if (delivery === "immediate" && x.startKeys !== undefined && !keys(x.startKeys, "png"))
+      throw new Error("Invalid start keys");
+    return { v: 1, type: "presentation", trigger: x.trigger, delivery, plan: plan(x.plan), inputEnabled: x.inputEnabled, ...x.startKeys === undefined ? {} : { startKeys: x.startKeys } };
   }
   if (x.type === "input") {
     exact(x, ["v", "type", "enabled"]);
@@ -15613,7 +15620,7 @@ var sleep = (milliseconds, signal) => new Promise((resolve) => {
   signal.addEventListener("abort", done, { once: true });
 });
 function validate(plan2) {
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(plan2.generation) || !Array.isArray(plan2.frames) || !plan2.frames.length || plan2.frames.length > 12)
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(plan2.generation) || !Array.isArray(plan2.frames) || !plan2.frames.length || plan2.frames.length > 15)
     throw new Error("Invalid frame plan");
   for (const [position, frame] of plan2.frames.entries()) {
     if (frame.index !== position || !Number.isFinite(frame.offsetMs) || frame.offsetMs < 0 || frame.keys.length !== 15)
@@ -15634,14 +15641,14 @@ async function playFramePlan(plan2, sink, options = {}) {
       break;
     const deadline = startedAt + frame.offsetMs;
     const final = position === plan2.frames.length - 1;
-    if (!final && now() > deadline)
+    if (position > 0 && !final && now() > deadline)
       continue;
     const remaining = deadline - now();
     if (remaining > 0)
       await wait(remaining, signal);
     if (signal.aborted)
       break;
-    if (!final && now() > deadline)
+    if (position > 0 && !final && now() > deadline)
       continue;
     await sink(frame, signal);
     if (signal.aborted)
@@ -15652,22 +15659,45 @@ async function playFramePlan(plan2, sink, options = {}) {
 }
 
 // src/controller.ts
+var HardwareAndSoftware = 0;
+var Hardware = 1;
+
 class CanvasController {
   options;
   cells = new Map;
+  painted = new Set;
   generation = "offline";
   input = false;
   online = false;
   announced = false;
   playback;
+  pending;
   constructor(options) {
     this.options = options;
   }
-  ready() {
-    if (!this.online || this.announced || this.cells.size < 15)
+  async ready() {
+    if (!this.online || this.cells.size < 15 || this.painted.size < 15)
       return;
-    this.announced = true;
-    this.options.send({ v: 1, type: "cells-ready", deviceId: this.options.deviceId ?? "streamdeck-classic" });
+    if (!this.announced) {
+      this.announced = true;
+      this.options.send({ v: 1, type: "cells-ready", deviceId: this.options.deviceId ?? "streamdeck-classic" });
+    }
+    await this.playPending();
+  }
+  async playPending() {
+    const message = this.pending;
+    if (!message || !this.online || this.cells.size < 15 || this.painted.size < 15)
+      return;
+    this.pending = undefined;
+    this.playback?.abort();
+    const controller = this.playback = new AbortController;
+    await playFramePlan(message.plan, async (frame) => {
+      const final = frame.index === message.plan.frames.length - 1, target3 = final ? HardwareAndSoftware : Hardware;
+      await Promise.all(Array.from({ length: 15 }, (_, index) => this.cells.get(index).setImage(frame.keys[index], { target: target3 })));
+      this.options.send({ v: 1, type: "frame-sent", generation: message.plan.generation, frame: frame.index });
+    }, { signal: controller.signal });
+    if (!controller.signal.aborted)
+      this.input = message.inputEnabled;
   }
   connection(connected) {
     if (this.online === connected)
@@ -15685,15 +15715,24 @@ class CanvasController {
     if (!Number.isInteger(index) || index < 0 || index > 14)
       return;
     this.cells.set(index, cell);
+    this.painted.delete(index);
     const cached2 = this.options.cache.load();
-    if (cached2)
-      await cell.setImage(cached2.plan.frames.at(-1).keys[index]);
-    this.ready();
+    if (cached2) {
+      const prepared = cached2.delivery !== "immediate" && cached2.startKeys;
+      await cell.setImage(prepared ? cached2.startKeys[index] : cached2.plan.frames.at(-1).keys[index], { target: Hardware });
+      if (cached2.delivery === "resume")
+        this.pending = cached2;
+    }
+    if (this.cells.get(index) !== cell)
+      return;
+    this.painted.add(index);
+    await this.ready();
   }
   disappear(index, cell) {
     if (this.cells.get(index) !== cell)
       return;
     this.cells.delete(index);
+    this.painted.delete(index);
     if (this.cells.size === 0) {
       this.announced = false;
       this.input = false;
@@ -15712,17 +15751,14 @@ class CanvasController {
     }
     this.options.cache.save(message);
     this.playback?.abort();
-    const controller = this.playback = new AbortController;
     this.generation = message.plan.generation;
     this.input = false;
-    if (this.cells.size < 15)
+    if (message.delivery === "prepare") {
+      this.pending = undefined;
       return;
-    await playFramePlan(message.plan, async (frame) => {
-      await Promise.all(Array.from({ length: 15 }, (_, index) => this.cells.get(index).setImage(frame.keys[index])));
-      this.options.send({ v: 1, type: "frame-sent", generation: message.plan.generation, frame: frame.index });
-    }, { signal: controller.signal });
-    if (!controller.signal.aborted)
-      this.input = message.inputEnabled;
+    }
+    this.pending = message;
+    await this.playPending();
   }
   key(index, phase) {
     if (this.input && this.cells.has(index))

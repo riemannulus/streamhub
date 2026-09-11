@@ -27,3 +27,20 @@ test('announces readiness only after both transport and all cells are available'
   controller.connection(true);
   expect(messages.filter(message=>message.type==='cells-ready')).toHaveLength(2);
 });
+
+test('prepared unlock paints standby first and resumes once after all cells are ready',async()=>{
+  const start='data:image/png;base64,c3RhcnQ=',middle='data:image/jpeg;base64,bWlkZGxl',final='data:image/png;base64,ZmluYWw=';
+  const messages:any[]=[],writes=Array.from({length:15},()=>[] as Array<{image:string;target?:number}>);let cached:any;
+  const controller=new CanvasController({send:message=>messages.push(message),cache:{save(message){cached=message;},load:()=>cached}});
+  controller.connection(true);
+  const plan={generation:'resume-1',frames:[{index:0,offsetMs:0,keys:Array(15).fill(middle)},{index:1,offsetMs:1,keys:Array(15).fill(final)}]};
+  await controller.receive({v:1,type:'presentation',trigger:'unlock',delivery:'prepare',startKeys:Array(15).fill(start),inputEnabled:false,plan});
+  for(let index=0;index<14;index++)await controller.appear(index,{setImage:async(image:string,options?:{target?:number})=>{writes[index]!.push({image,target:options?.target});}});
+  await controller.receive({v:1,type:'presentation',trigger:'unlock',delivery:'resume',startKeys:Array(15).fill(start),inputEnabled:true,plan});
+  expect(writes.flat()).toHaveLength(14);
+  await controller.appear(14,{setImage:async(image:string,options?:{target?:number})=>{writes[14]!.push({image,target:options?.target});}});
+  expect(writes.every(cell=>cell.map(write=>write.image).join(',')===[start,middle,final].join(','))).toBe(true);
+  expect(writes.every(cell=>cell.map(write=>write.target).join(',')==='1,1,0')).toBe(true);
+  expect(messages.filter(message=>message.type==='cells-ready')).toHaveLength(1);
+  expect(messages.filter(message=>message.type==='frame-sent').map(message=>message.frame)).toEqual([0,1]);
+});

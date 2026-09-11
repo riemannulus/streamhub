@@ -1,7 +1,8 @@
 import {mkdirSync,rmSync,utimesSync,writeFileSync} from 'node:fs';import {join,resolve} from 'node:path';import sharp from 'sharp';
 const root='com.streamhub.studio.sdPlugin',dir=join(root,'imgs');mkdirSync(dir,{recursive:true});mkdirSync(join(root,'bin'),{recursive:true});mkdirSync(join(root,'profiles'),{recursive:true});
 const make=async(name:string,size:number)=>sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect width="100%" height="100%" rx="${size/5}" fill="#3478f6"/><path d="M${size*.22} ${size*.5}h${size*.56}M${size*.5} ${size*.22}v${size*.56}" stroke="white" stroke-width="${size*.1}" stroke-linecap="round"/></svg>`)).png().toFile(join(dir,name));
-await Promise.all([make('action.png',20),make('action@2x.png',40),make('key.png',72),make('category.png',28),make('category@2x.png',56),make('plugin.png',256),make('plugin@2x.png',512)]);
+const fallback=sharp({create:{width:72,height:72,channels:3,background:'#000000'}}).png().toFile(join(dir,'key.png'));
+await Promise.all([make('action.png',20),make('action@2x.png',40),fallback,make('category.png',28),make('category@2x.png',56),make('plugin.png',256),make('plugin@2x.png',512)]);
 const actions=Object.fromEntries(Array.from({length:15},(_,index)=>{
   const column=index%5,row=Math.floor(index/5);
   return[`${column},${row}`,{Name:'Streamhub 캔버스 셀',Settings:{},State:0,States:[{FFamily:'',FSize:'',FStyle:'',FUnderline:'',Image:'',Title:'',TitleAlignment:'',TitleColor:'',TitleShow:''}],UUID:'com.streamhub.studio.canvas-cell'}] as const;

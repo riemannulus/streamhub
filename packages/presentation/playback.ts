@@ -11,7 +11,7 @@ const sleep=(milliseconds:number,signal:AbortSignal)=>new Promise<void>(resolve=
 });
 
 function validate(plan:FramePlan):void{
-  if(!/^[A-Za-z0-9_-]{1,64}$/.test(plan.generation)||!Array.isArray(plan.frames)||!plan.frames.length||plan.frames.length>12)throw new Error('Invalid frame plan');
+  if(!/^[A-Za-z0-9_-]{1,64}$/.test(plan.generation)||!Array.isArray(plan.frames)||!plan.frames.length||plan.frames.length>15)throw new Error('Invalid frame plan');
   for(const [position,frame] of plan.frames.entries()){
     if(frame.index!==position||!Number.isFinite(frame.offsetMs)||frame.offsetMs<0||frame.keys.length!==15)throw new Error('Invalid frame plan');
     if(position>0&&frame.offsetMs<=plan.frames[position-1]!.offsetMs)throw new Error('Frame offsets must increase');
@@ -29,11 +29,11 @@ export async function playFramePlan(plan:FramePlan,sink:(frame:PlannedFrame,sign
     if(signal.aborted)break;
     const deadline=startedAt+frame.offsetMs;
     const final=position===plan.frames.length-1;
-    if(!final&&now()>deadline)continue;
+    if(position>0&&!final&&now()>deadline)continue;
     const remaining=deadline-now();
     if(remaining>0)await wait(remaining,signal);
     if(signal.aborted)break;
-    if(!final&&now()>deadline)continue;
+    if(position>0&&!final&&now()>deadline)continue;
     await sink(frame,signal);
     if(signal.aborted)break;
     sent.push(frame.index);
