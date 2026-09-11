@@ -10,7 +10,7 @@ if (args.length && (args.length !== 2 || args[0] !== '--pages')) {
 
 try {
   const board = args.length ? validatePageConfig(JSON.parse(readFileSync(args[1]!, 'utf8'))) : undefined;
-  updateConfig(config => ({ ...config, streamdeck: { ...config.streamdeck, enabled: true, ...(board ? {board} : {}) } }));
+  updateConfig(config => ({ ...config, display:{...config.display,mode:'hid'},streamdeck: { ...config.streamdeck, enabled: true, ...(board ? {board} : {}) },streamdeckPlugin:config.streamdeckPlugin&&{...config.streamdeckPlugin,enabled:false} }));
   console.log('Stream Deck 사용을 설정에 등록했습니다.');
   console.log(`설정: ${configPath()}`);
   console.log('bun start로 실행하세요. 이미 실행 중이면 종료한 뒤 다시 시작하세요.');

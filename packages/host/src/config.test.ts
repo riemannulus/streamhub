@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readConfig, updateConfig, validateConfig } from './config';
+import { configuredDisplay, readConfig, updateConfig, validateConfig } from './config';
 
 const original = process.env.STREAMHUB_CONFIG;
 const directories: string[] = [];
@@ -36,8 +36,8 @@ test('initialization and registration preserve tokens and unknown settings acros
   expect(statSync(file).mode & 0o777).toBe(0o600);
   const configured = { ...first, port: 31416, future: { setting: true } };
   writeFileSync(file, JSON.stringify(configured));
-  for (let i = 0; i < 2; i++) updateConfig(config => ({ ...config, streamdeck: { enabled: true } }));
-  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...configured, streamdeck: { enabled: true } });
+  for (let i = 0; i < 2; i++) updateConfig(config => ({ ...config,display:{...config.display,mode:'hid'},streamdeck: { enabled: true } }));
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...configured,display:{mode:'hid'},streamdeck: { enabled: true } });
   expect(statSync(file).mode & 0o777).toBe(0o600);
   expect(readConfig(true).adminToken).toBe(first.adminToken);
 });
@@ -102,4 +102,31 @@ test('plugin-only config requires an absolute private token path and valid port'
   expect(validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'/tmp/streamhub-token'}}).streamdeckPlugin?.enabled).toBe(true);
   expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:31417,tokenFile:'relative'}})).toThrow();
   expect(()=>validateConfig({...base,streamdeckPlugin:{enabled:true,port:0,tokenFile:'/tmp/token'}})).toThrow();
+});
+
+test('canonical display mode is authoritative and keeps legacy owners mutually exclusive',()=>{
+  const plugin={port:31417,tokenFile:'/tmp/streamhub-token'};
+  const canonical=validateConfig({...valid(),display:{mode:'plugin',plugin},streamdeck:{enabled:true}});
+  expect(configuredDisplay(canonical)).toEqual({mode:'plugin',plugin});
+  expect(canonical.streamdeck?.enabled).toBe(false);
+  expect(canonical.streamdeckPlugin?.enabled).toBe(true);
+
+  const hid=validateConfig({...valid(),display:{mode:'hid'},streamdeckPlugin:{enabled:true,...plugin}});
+  expect(configuredDisplay(hid)).toEqual({mode:'hid',plugin});
+  expect(hid.streamdeck?.enabled).toBe(true);
+  expect(hid.streamdeckPlugin?.enabled).toBe(false);
+});
+
+test('legacy display ownership normalizes safely and rejects two enabled owners',()=>{
+  const plugin={enabled:true,port:31417,tokenFile:'/tmp/streamhub-token'};
+  expect(configuredDisplay(validateConfig({...valid(),streamdeckPlugin:plugin}))).toEqual({mode:'plugin',plugin:{port:31417,tokenFile:plugin.tokenFile}});
+  expect(configuredDisplay(validateConfig({...valid(),streamdeck:{enabled:true}}))).toEqual({mode:'hid'});
+  expect(configuredDisplay(validateConfig(valid()))).toEqual({mode:'off'});
+  expect(()=>validateConfig({...valid(),streamdeck:{enabled:true},streamdeckPlugin:plugin})).toThrow('Display ownership is ambiguous');
+});
+
+test('canonical display validation rejects unknown modes and fields',()=>{
+  expect(()=>validateConfig({...valid(),display:{mode:'automatic'}})).toThrow('Invalid display config');
+  expect(()=>validateConfig({...valid(),display:{mode:'hid',devicePath:'/dev/test'}})).toThrow('Invalid display config');
+  expect(()=>validateConfig({...valid(),display:{mode:'plugin'}})).toThrow('Invalid display config');
 });

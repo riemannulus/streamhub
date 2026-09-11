@@ -76,7 +76,7 @@ export async function startSimulation(options:SimulationOptions={}):Promise<Simu
   }
   function mockActions(){const definitions:Record<string,{exec:string[];args:Record<string,string>;sources:string[]}>=Object.create(null);for(const page of board.pages)for(const button of page.buttons??[])if(button.type==='action'){const names=Object.keys(button.args);definitions[button.name]={exec:['/usr/bin/true',...names.map(name=>`{${name}}`)],args:Object.fromEntries(names.map(name=>[name,'.*'])),sources:sourceNames};}return definitions;}
   async function boot(){
-    runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),streamdeck:{enabled:true,board}},directory,{
+    runtime=await startHost({port:31415,adminToken,sources,actions:mockActions(),display:{mode:'hid'},streamdeck:{enabled:true,board}},directory,{
       dependencies:{openStore:path=>signalStore=new SignalStore(path),serve:options=>startServer({...options,port:0}),display:async(store,path,displayOptions)=>display=await startDisplay(store,path,{
         ...displayOptions,pollMs,
         execute:async(effect,signal)=>{const result=actionResult;emit({type:'effect',effect,status:'running'});await new Promise<void>((resolve,reject)=>{if(signal?.aborted){reject(new Error('Cancelled'));return;}const abort=()=>{clearTimeout(timer);reject(new Error('Cancelled'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},100);signal?.addEventListener('abort',abort,{once:true});});emit({type:'effect',effect,status:result,...(result==='error'?{message:'모의 실행 실패'}:{})});if(result==='error')throw new Error('모의 실행 실패');},

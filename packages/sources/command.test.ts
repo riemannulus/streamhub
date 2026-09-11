@@ -7,7 +7,7 @@ import {startHost} from '../host/src/runtime';
 import {startServer} from '../host/src/server';
 import {startDisplay} from '../host/src/display';
 import type {Config} from '../host/src/config';
-const config=():Config=>({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},streamdeck:{enabled:false,board:{defaultPage:'home',pages:[{id:'home',title:'Home',signals:{}}]}}});
+const config=():Config=>({port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'off'},streamdeck:{enabled:false,board:{defaultPage:'home',pages:[{id:'home',title:'Home',signals:{}}]}}});
 const registration={configFile:'/tmp/config.json',cwd:'/tmp',bun:process.execPath,script:'/tmp/run-command-source.ts'};
 test('command source registration preserves settings and repeats without duplicating credentials/actions/pages',()=>{
   const initial={...config(),extension:{keep:true}},registered=registerCommandSource(initial,registration);
@@ -69,7 +69,7 @@ test('registered page key runs the command and renders its retained signal throu
   const file=join(directory,'config.json'),repository=new URL('../../',import.meta.url).pathname;
   const probe=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response()});
   const port=probe.port!;await probe.stop(true);
-  const registered=registerCommandSource({port,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},streamdeck:{enabled:true}},
+  const registered=registerCommandSource({port,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'hid'},streamdeck:{enabled:true}},
     {...registration,configFile:file,cwd:repository,script:new URL('../../scripts/run-command-source.ts',import.meta.url).pathname,argv:[process.execPath,'-e','process.exit(0)']});
   writeFileSync(file,JSON.stringify(registered));
   let key:((index:number,edge:'down'|'up')=>void)|undefined;

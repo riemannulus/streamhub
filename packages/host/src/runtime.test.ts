@@ -3,7 +3,7 @@ import { startHost, type HostDependencies } from './runtime';
 import { SignalStore } from './store';
 import type { Config } from './config';
 
-const config:Config={port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}}};
+const config:Config={port:31415,adminToken:'a'.repeat(32),sources:{demo:{token:'b'.repeat(32)}},display:{mode:'off'}};
 const deferred=<T>()=>{let resolve!:(value:T)=>void;let reject!:(error:unknown)=>void;const promise=new Promise<T>((done,fail)=>{resolve=done;reject=fail;});return{promise,resolve,reject};};
 function resources(){
   const calls:string[]=[];

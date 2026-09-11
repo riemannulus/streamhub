@@ -7,8 +7,11 @@ import { validatePageConfig, validatePageSources, type PageConfig } from '../../
 
 export type SourceConfig = { token: string; allowedHosts?: string[] };
 export type AuthConfig = { adminToken: string; sources: Record<string, SourceConfig> };
+export type DisplayMode = 'off' | 'hid' | 'plugin';
+export type DisplayConfig = { mode: DisplayMode; plugin?: { port: number; tokenFile: string } };
 export type Config = AuthConfig & {
   port: number;
+  display: DisplayConfig;
   streamdeck?: { enabled: boolean; board?: PageConfig };
   streamdeckPlugin?: {enabled:boolean;port:number;tokenFile:string};
   actions?: Record<string, ActionDefinition>;
@@ -17,6 +20,13 @@ export type Config = AuthConfig & {
 export const configPath = () => resolve(process.env.STREAMHUB_CONFIG ?? '.streamhub/config.json');
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string' && !item.includes('\0'));
+const pluginSettings = (value: unknown): {port:number;tokenFile:string}|undefined => {
+  if(value===undefined)return;
+  if(!record(value)||typeof value.enabled!=='boolean'||!Number.isInteger(value.port)||(value.port as number)<1||(value.port as number)>65535||typeof value.tokenFile!=='string'||!isAbsolute(value.tokenFile)||Object.keys(value).some(key=>!['enabled','port','tokenFile'].includes(key)))throw new Error('Invalid streamdeckPlugin config');
+  return{port:value.port as number,tokenFile:value.tokenFile};
+};
+
+export function configuredDisplay(config:Config):DisplayConfig{return structuredClone(config.display);}
 
 /** Shared by file loading and standalone HTTP server construction. */
 export function validateAuthConfig(input: unknown): asserts input is AuthConfig {
@@ -33,7 +43,7 @@ export function validateAuthConfig(input: unknown): asserts input is AuthConfig 
 /** Validate all startup configuration without opening devices, files or sockets. */
 export function validateConfig(input: unknown): Config {
   validateAuthConfig(input);
-  const config = input as AuthConfig & Record<string, unknown>;
+  let config = input as AuthConfig & Record<string, unknown>;
   if (!Number.isInteger(config.port) || (config.port as number) < 1 || (config.port as number) > 65535) throw new Error('Invalid host port');
   if (config.streamdeck !== undefined) {
     if (!record(config.streamdeck) || typeof config.streamdeck.enabled !== 'boolean' || Object.keys(config.streamdeck).some(key => !['enabled','board'].includes(key))) throw new Error('Invalid streamdeck config');
@@ -42,9 +52,27 @@ export function validateConfig(input: unknown): Config {
       validatePageSources(board,Object.keys(config.sources));
     }
   }
-  if(config.streamdeckPlugin!==undefined){
-    if(!record(config.streamdeckPlugin)||typeof config.streamdeckPlugin.enabled!=='boolean'||!Number.isInteger(config.streamdeckPlugin.port)||(config.streamdeckPlugin.port as number)<1||(config.streamdeckPlugin.port as number)>65535||typeof config.streamdeckPlugin.tokenFile!=='string'||!isAbsolute(config.streamdeckPlugin.tokenFile)||Object.keys(config.streamdeckPlugin).some(key=>!['enabled','port','tokenFile'].includes(key)))throw new Error('Invalid streamdeckPlugin config');
+  const legacyPlugin=pluginSettings(config.streamdeckPlugin),legacyHid=record(config.streamdeck)&&config.streamdeck.enabled===true,legacyPluginEnabled=record(config.streamdeckPlugin)&&config.streamdeckPlugin.enabled===true;
+  let display:DisplayConfig;
+  if(config.display!==undefined){
+    if(!record(config.display)||Object.keys(config.display).some(key=>!['mode','plugin'].includes(key))||!['off','hid','plugin'].includes(config.display.mode as string))throw new Error('Invalid display config');
+    let plugin=legacyPlugin;
+    if(config.display.plugin!==undefined){
+      const raw=config.display.plugin;
+      if(!record(raw)||Object.keys(raw).some(key=>!['port','tokenFile'].includes(key)))throw new Error('Invalid display config');
+      plugin=pluginSettings({enabled:true,...raw});
+    }
+    if(config.display.mode==='plugin'&&!plugin)throw new Error('Invalid display config');
+    display={mode:config.display.mode as DisplayMode,...(plugin?{plugin}:{})};
+  }else{
+    if(legacyHid&&legacyPluginEnabled)throw new Error('Display ownership is ambiguous');
+    display={mode:legacyHid?'hid':legacyPluginEnabled?'plugin':'off',...(legacyPlugin?{plugin:legacyPlugin}:{})};
   }
+  const legacyBoard=record(config.streamdeck)?config.streamdeck.board:undefined;
+  config={...config,display,
+    ...(config.streamdeck!==undefined||display.mode==='hid'?{streamdeck:{enabled:display.mode==='hid',...(legacyBoard===undefined?{}:{board:legacyBoard})}}:{}),
+    ...(display.plugin?{streamdeckPlugin:{enabled:display.mode==='plugin',...display.plugin}}:{}),
+  };
   if (config.actions !== undefined) {
     if (!record(config.actions)) throw new Error('Invalid actions');
     for (const action of Object.values(config.actions)) {
@@ -72,7 +100,7 @@ export function validateConfig(input: unknown): Config {
 }
 
 function defaults(): Config {
-  return { port: 31415, adminToken: randomUUID() + randomUUID(), sources: { demo: { token: randomUUID() + randomUUID() } } };
+  return { port: 31415, adminToken: randomUUID() + randomUUID(), sources: { demo: { token: randomUUID() + randomUUID() } },display:{mode:'off'} };
 }
 function load(path: string): Config { return validateConfig(JSON.parse(readFileSync(path, 'utf8'))); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === 'ENOENT'; }
