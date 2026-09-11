@@ -6,6 +6,7 @@ import { startSessionMonitor } from '../packages/host/src/session-monitor';
 
 const sessionMode=process.argv.includes('--session');
 if(process.argv.slice(2).some(arg=>arg!=='--session'))throw new Error('Usage: bun run hid:lifecycle-check [--session]');
+if(sessionMode)console.log('Runtime 단위의 재시작/복구 합격 판정에는 bun run display:check --mode hid를 사용하세요.');
 const events:Array<{at:string;event:string}>=[];
 const log=(event:string)=>{events.push({at:new Date().toISOString(),event});console.log(event);};
 const errors:string[]=[];

@@ -161,6 +161,19 @@ bun start
 
 `off` 모드는 HTTP와 데이터 수집만 실행합니다. HID 모드는 15키·72×72 장치 한 대를 직접 소유하므로 Elgato 앱을 종료해야 합니다. Plugin 모드는 Elgato 앱과 프로필을 사용하며 SDK 전달 지연 때문에 HID보다 잠금 복구와 애니메이션이 느릴 수 있습니다.
 
+### 모드별 잠금 복구 확인
+
+Studio에서 모드를 저장하고 Runtime을 재시작한 다음 별도 터미널에서 실행합니다.
+
+```sh
+bun run display:check --mode hid
+bun run display:check --mode plugin
+```
+
+명령은 설정 모드와 현재 Runtime의 활성 모드가 같은지 먼저 확인하고, 자격 증명이나 장치 경로를 출력하지 않습니다. 안내에 따라 Enter를 누른 뒤 Mac을 잠갔다가 해제하면 25ms 간격으로 `recovering → ready`를 관찰합니다. `ready`는 HID의 정확한 마지막 프레임 쓰기 또는 Plugin의 마지막 `frame-sent` 확인 뒤에만 기록됩니다. 기본 합격 상한은 HID 1,000ms, Plugin 3,000ms이며 결과는 `.streamhub/display-mode-check.json`에 누적됩니다.
+
+실기기 합격 기록에는 장치 모델·펌웨어, macOS 버전, Stream Deck 앱 버전, 모드별 반복 횟수와 median/p95/max, 중간 프로필 깜빡임 여부, 고정 버튼과 동적 버튼의 정확히 한 번 실행 여부를 함께 남깁니다. Plugin의 앱 깨우기 지연은 외부 지연으로 별도 기록하며 HID와 같은 애니메이션 품질을 보장한다고 간주하지 않습니다.
+
 | 상황 | 처리 |
 |---|---|
 | 시작 시 잠금 상태 불명·모니터 부재 | 기본 대기화면 유지, 입력 차단 |

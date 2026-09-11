@@ -19,6 +19,7 @@
     "hid:restore": "bun scripts/hid-restore.ts",
     "hid:lifecycle-check": "bun scripts/hid-lifecycle-check.ts",
     "hid:pages-check": "bun scripts/hid-pages-check.ts",
+    "display:check": "bun scripts/display-mode-check.ts",
     "build": "bun scripts/build.ts"
     ,"streamdeck:setup":"bun scripts/setup-streamdeck-plugin.ts"
     ,"streamdeck:plugin:build":"bun run --cwd packages/streamdeck-plugin build"
