@@ -1,10 +1,12 @@
 import { listStreamDecks, openStreamDeck } from '@elgato-stream-deck/node';
 import type { DeckPage } from './index';
+import type {TransitionSpec} from '../studio/document';
 import { renderKey } from './render';
 
 type Hardware={fillKeyBuffer(index:number,bytes:Uint8Array,options?:{format:'rgb'}):Promise<void>; resetToLogo():Promise<void>;close():Promise<void>};
 export const pageIdentity=(page:DeckPage):string=>JSON.stringify([page.viewId ?? 'legacy',page.index]);
 type PlaybackOptions={now?:()=>number; wait?:(ms:number,signal:AbortSignal)=>Promise<void>;render?:typeof renderKey};
+export type HidPresentation={identity:string;generation:string;from?:readonly Buffer[];to:readonly Buffer[];transition:TransitionSpec;releaseAfter?:boolean};
 const wait=(ms:number,signal:AbortSignal)=>new Promise<void>(resolve=>{
   if(signal.aborted){resolve();return;}
   const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve();};
@@ -17,8 +19,9 @@ export class HidDisplay {
   private sent:(Buffer|undefined)[]=Array(15).fill(undefined);
   private identity?:string;
   constructor(private readonly hardware:Hardware,private readonly onClosing:()=>void=()=>{},private readonly playback:PlaybackOptions={}){}
-  async write(frame:DeckPage,signal:AbortSignal){
+  async write(frame:DeckPage|HidPresentation,signal:AbortSignal){
     if(this.closed)throw new Error('HID display is closed');
+    if('to' in frame){await this.writePresentation(frame,signal);return;}
     if(frame.keys.length!==15)throw new Error('Expected a full 15-key frame');
     const canceled=()=>signal.aborted || this.closed;
     const target:Buffer[]=[];
@@ -72,6 +75,22 @@ export class HidDisplay {
     if(canceled())return;
     await send(target);
     if(!canceled())this.identity=identity;
+  }
+  private async writePresentation(frame:HidPresentation,signal:AbortSignal){
+    if(frame.to.length!==15||frame.to.some(bytes=>bytes.length!==72*72*3))throw new Error('Expected fifteen tightly packed 72x72 RGB keys');
+    const canceled=()=>signal.aborted||this.closed,target=frame.to.map(Buffer.from),fallback=frame.from?.map(Buffer.from),from=this.sent.every(Boolean)?this.sent.slice() as Buffer[]:fallback;
+    const send=async(buffers:readonly Buffer[])=>{for(let index=0;index<15;index++){if(canceled())return;await this.hardware.fillKeyBuffer(index,buffers[index]!,{format:'rgb'});this.sent[index]=Buffer.from(buffers[index]!);}if(!canceled())this.identity=frame.identity;};
+    const animate=frame.transition.type!=='none'&&frame.transition.durationMs>0&&this.identity!==frame.identity&&from?.length===15;
+    if(animate){
+      const duration=frame.transition.durationMs;if(!Number.isFinite(duration)||duration>500)throw new Error('Invalid transition duration');const now=this.playback.now??(()=>performance.now()),started=now();
+      for(let step=1;step<5;step++){
+        const deadline=duration*step/5;if(now()-started>deadline)continue;await(this.playback.wait??wait)(Math.max(0,deadline-(now()-started)),signal);if(canceled())return;const progress=Math.min(1,(now()-started)/duration);if(progress>=1)break;
+        const buffers=from!.map((source,index)=>{const destination=target[index]!;return Buffer.from(source.map((value,pixel)=>{if(frame.transition.type==='crossfade')return Math.round(value+(destination[pixel]!-value)*progress);if(progress<.5)return Math.round(value*(1-progress*2));return Math.round(destination[pixel]!*((progress-.5)*2));}));});
+        await send(buffers);if(canceled())return;
+      }
+      await(this.playback.wait??wait)(Math.max(0,duration-(now()-started)),signal);
+    }
+    if(!canceled())await send(target);
   }
   async standby(){if(!this.closed){await this.hardware.resetToLogo();this.sent=Array(15).fill(undefined);this.identity=undefined;}}
   async close(){if(this.closed)return;this.closed=true;this.onClosing();this.cache.clear();this.sent=[];await this.hardware.close();}

@@ -1,17 +1,15 @@
-import type { DeckPage } from './index';
-
-export type DisplayDevice = {
-  write(frame: DeckPage, signal: AbortSignal): Promise<void>;
+export type DisplayDevice<T=any> = {
+  write(frame: T, signal: AbortSignal): Promise<void>;
   standby(): Promise<void>;
   close(): Promise<void>;
 };
-export type LifecycleOptions = { timeoutMs?: number; onError?: (error: unknown) => void };
+export type LifecycleOptions<T=any> = { timeoutMs?: number; onError?: (error: unknown) => void;identity?:(work:T)=>string;releaseAfter?:(work:T)=>boolean };
 class DisplayTimeout extends Error {}
 
 /** Serial display owner. Suspend is latched even when resume arrives during a write. */
-export class DisplayLifecycle {
-  private device?: DisplayDevice;
-  private latest?: DeckPage;
+export class DisplayLifecycle<T=any> {
+  private device?: DisplayDevice<T>;
+  private latest?: T;
   private attemptedPage?: string;
   private transitioning = false;
   private version = 0;
@@ -30,7 +28,7 @@ export class DisplayLifecycle {
   private releaseRequired = false;
   private readonly timeoutMs: number;
 
-  constructor(private readonly connect: () => Promise<DisplayDevice>, private readonly options: LifecycleOptions = {}) {
+  constructor(private readonly connect: () => Promise<DisplayDevice<T>>, private readonly options: LifecycleOptions<T> = {}) {
     this.timeoutMs = options.timeoutMs ?? 3000;
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs < 1) throw new RangeError('Invalid display timeout');
   }
@@ -47,10 +45,10 @@ export class DisplayLifecycle {
     }
     return this.schedule();
   }
-  present(frame: DeckPage): Promise<void> {
+  present(frame: T): Promise<void> {
     if (this.stopped) return this.pump ?? Promise.resolve();
-    if (this.transitioning || (this.latest && (this.latest.viewId !== frame.viewId || this.latest.index !== frame.index))) this.invalidate();
-    this.latest = structuredClone(frame);
+    if (this.transitioning || (this.latest && this.identity(this.latest) !== this.identity(frame))) this.invalidate();
+    this.latest = frame;
     this.version++;
     return this.schedule();
   }
@@ -127,7 +125,8 @@ export class DisplayLifecycle {
       })]);
     } finally { clearTimeout(timer); }
   }
-  private async close(device: DisplayDevice): Promise<boolean> {
+  private identity(work:T):string{return this.options.identity?.(work)??JSON.stringify(work);}
+  private async close(device: DisplayDevice<T>): Promise<boolean> {
     try { await this.bounded(device.close()); return true; }
     catch (error) { this.report(error); return false; }
   }
@@ -170,7 +169,7 @@ export class DisplayLifecycle {
         if (this.rendered === this.version) return;
         const version = this.version;
         const controller = new AbortController();
-        const page = JSON.stringify([this.latest.viewId ?? 'legacy', this.latest.index]);
+        const page = this.identity(this.latest);
         this.transitioning = this.attemptedPage !== undefined && this.attemptedPage !== page;
         this.attemptedPage = page;
         this.controller = controller;
@@ -185,6 +184,11 @@ export class DisplayLifecycle {
         if (!controller.signal.aborted && this.allowed && !this.cleanupRequested && !this.closeRequested) {
           this.rendered = version;
           this.releaseRequired = this.held.size > 0;
+          if(this.options.releaseAfter?.(this.latest)){
+            const device=this.device;this.device=undefined;this.cleared=true;
+            if(device&&!await this.close(device))this.failed=true;
+            return;
+          }
         }
       }
     } catch (error) {

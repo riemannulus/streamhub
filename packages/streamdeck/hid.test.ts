@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { SessionDeck } from './index';
-import { HidDisplay } from './hid';
+import { HidDisplay,type HidPresentation } from './hid';
 
 test('a suspended frame stops after the current key before standby and release',async()=>{
   const commands:string[]=[];let release!:()=>void;
@@ -72,4 +72,10 @@ test('canceling during a timed wait returns promptly without sending another key
   await Bun.sleep(5);cancel.abort();
   await Promise.race([work,Bun.sleep(100).then(()=>{throw new Error('Abort did not interrupt animation wait');})]);
   expect(writes).toBe(15);
+});
+
+test('prepared RGB presentations keep crossfade and fade-through-black distinct',async()=>{
+  const play=async(type:HidPresentation['transition']['type'])=>{let time=0;const values:number[]=[];const display=new HidDisplay({fillKeyBuffer:async(index,bytes)=>{if(index===0)values.push(bytes[0]!);},resetToLogo:async()=>{},close:async()=>{}},()=>{},{now:()=>time,wait:async milliseconds=>{time+=milliseconds;}});await display.write({identity:`${type}-target`,generation:'g1',from:Array.from({length:15},()=>Buffer.alloc(72*72*3,100)),to:Array.from({length:15},()=>Buffer.alloc(72*72*3,200)),transition:{type,durationMs:250}},new AbortController().signal);return values;};
+  expect(await play('crossfade')).toEqual([120,140,160,180,200]);
+  expect(await play('fade-through-black')).toEqual([60,20,40,120,200]);
 });
