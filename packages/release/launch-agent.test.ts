@@ -45,7 +45,33 @@ test('ownership validation rejects arguments outside the exact expected pair',()
   expect(()=>validateOwnedLaunchAgent(xml,input)).toThrow('ProgramArguments');
 });
 
+test('ownership validation rejects fields hidden in CDATA or comments',()=>{
+  const payload=renderLaunchAgent(input).replace('<!-- Managed by Streamhub Preview -->','');
+  const cdata=`<!-- Managed by Streamhub Preview -->\n<plist version="1.0"><dict><![CDATA[${payload}]]></dict></plist>`;
+  const comment=`<!-- Managed by Streamhub Preview -->\n<plist version="1.0"><dict></dict></plist><!-- ${payload} -->`;
+  expect(()=>validateOwnedLaunchAgent(cdata,input)).toThrow('plist');
+  expect(()=>validateOwnedLaunchAgent(comment,input)).toThrow('plist');
+});
+
+test('ownership validation rejects malformed XML',()=>{
+  const xml=renderLaunchAgent(input).replace('</plist>','');
+  expect(()=>validateOwnedLaunchAgent(xml,input)).toThrow('plist');
+  expect(()=>validateOwnedLaunchAgent(renderLaunchAgent(input).replace('version="1.0"','version="not-a-version"'),input)).toThrow('plist');
+});
+
+test('ownership validation requires KeepAlive.SuccessfulExit to be false',()=>{
+  const xml=renderLaunchAgent(input).replace(
+    '<key>KeepAlive</key>\n<dict>\n<key>SuccessfulExit</key>\n<false/>\n</dict>',
+    '<key>KeepAlive</key>\n<true/>\n<key>SuccessfulExit</key>\n<false/>',
+  );
+  expect(()=>validateOwnedLaunchAgent(xml,input)).toThrow('KeepAlive');
+});
+
 test('launchctl projection ignores malformed and out-of-range values',()=>{
   expect(parseLaunchctlPrint('state = running\npid = 0\nlast exit code = 2147483648\nsecret = value')).toEqual({loaded:true,running:true});
   expect(parseLaunchctlPrint('state = sleeping\npid = 12.5\nlast exit code = -2147483648')).toEqual({loaded:true,running:false,lastExitStatus:-2147483648});
+});
+
+test('launchctl projection accepts indented print fields',()=>{
+  expect(parseLaunchctlPrint('    state = running\n        pid = 123\n  last exit code = -4')).toEqual({loaded:true,running:true,pid:123,lastExitStatus:-4});
 });
