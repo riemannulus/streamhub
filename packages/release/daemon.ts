@@ -20,16 +20,24 @@ const plutil='/usr/bin/plutil';
 const maxLogBytes=64*1024;
 const rolloverBytes=5*1024*1024;
 
-function publicError(action:string):Error{
-  return new Error(`Unable to ${action} Streamhub runtime service`);
+class PublicBoundaryError extends Error{
+  constructor(message:string,readonly decision=false){super(message);}
 }
 
-function publicLogError(action:string):Error{
-  return new Error(`Unable to ${action} Streamhub runtime log`);
+function publicError(action:string):PublicBoundaryError{
+  return new PublicBoundaryError(`Unable to ${action} Streamhub runtime service`);
 }
 
-function isDecisionError(error:unknown):boolean{
-  return error instanceof Error&&(error.message.startsWith('Refusing ')||error.message==='Streamhub runtime is not enabled');
+function publicLogError(action:string):PublicBoundaryError{
+  return new PublicBoundaryError(`Unable to ${action} Streamhub runtime log`);
+}
+
+function refusal(message:string):PublicBoundaryError{
+  return new PublicBoundaryError(message,true);
+}
+
+function isDecisionError(error:unknown):error is PublicBoundaryError{
+  return error instanceof PublicBoundaryError&&error.decision;
 }
 
 function isMissing(error:unknown):boolean{
@@ -66,13 +74,13 @@ function validateManagedDefinition(bytes:string,input:LaunchAgentInput):void{
   }catch{
     if(legacyOwnedInput(bytes,input)) return;
   }
-  throw new Error('Refusing to modify an unowned LaunchAgent definition');
+  throw refusal('Refusing to modify an unowned LaunchAgent definition');
 }
 
 function assertRegular(path:string,kind:string):void{
   const info=lstatSync(path);
-  if(info.isSymbolicLink()) throw new Error(`Refusing symbolic ${kind}`);
-  if(!info.isFile()) throw new Error(`Refusing non-regular ${kind}`);
+  if(info.isSymbolicLink()) throw refusal(`Refusing symbolic ${kind}`);
+  if(!info.isFile()) throw refusal(`Refusing non-regular ${kind}`);
 }
 
 function inspectLog(path:string):ReturnType<typeof lstatSync>|undefined{
@@ -88,15 +96,20 @@ function inspectLog(path:string):ReturnType<typeof lstatSync>|undefined{
 function assertManagedLogPaths(paths:LaunchAgentPaths):void{
   const domain=paths.domain.match(/^gui\/([1-9]\d*)$/);
   const plistSuffix=`/Library/LaunchAgents/${runtimeLabel}.plist`;
+  const isNormalizedAbsolute=(path:string):boolean=>path.startsWith('/')&&!path.includes('\0')&&path.split('/').every((segment,index)=>index===0||Boolean(segment)&&segment!=='.'&&segment!=='..');
   if(!domain||!Number.isSafeInteger(Number(domain[1]))||!paths.plistPath.endsWith(plistSuffix)){
-    throw new Error('Refusing unmanaged runtime log paths');
+    throw refusal('Refusing unmanaged runtime log paths');
   }
   const home=paths.plistPath.slice(0,-plistSuffix.length);
   const dataPath=`${home}/Library/Application Support/Streamhub/data`;
+  const runtimeSuffix='/app/runtime.ts';
+  const packageRoot=paths.runtimePath.endsWith(runtimeSuffix)?paths.runtimePath.slice(0,-runtimeSuffix.length):'';
+  const applicationRoot=packageRoot.match(/^(.*\/Streamhub)\/app\/[^/]+$/)?.[1];
   if(!home||paths.label!==runtimeLabel||paths.service!==`${paths.domain}/${runtimeLabel}`||
     paths.configPath!==`${dataPath}/config.json`||paths.logPath!==`${dataPath}/logs/runtime.log`||
-    paths.previousLogPath!==`${dataPath}/logs/runtime.log.1`){
-    throw new Error('Refusing unmanaged runtime log paths');
+    paths.previousLogPath!==`${dataPath}/logs/runtime.log.1`||!applicationRoot||
+    ![paths.plistPath,paths.configPath,paths.logPath,paths.previousLogPath,paths.runtimePath,packageRoot,applicationRoot].every(isNormalizedAbsolute)){
+    throw refusal('Refusing unmanaged runtime log paths');
   }
 }
 
@@ -185,8 +198,8 @@ async function defaultRunner(argv:readonly string[]):Promise<CommandResult>{
 async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<{exists:boolean;bytes?:string}>{
   try{
     const info=await lstat(paths.plistPath);
-    if(info.isSymbolicLink()) throw new Error('Refusing symbolic LaunchAgent definition');
-    if(!info.isFile()) throw new Error('Refusing non-regular LaunchAgent definition');
+    if(info.isSymbolicLink()) throw refusal('Refusing symbolic LaunchAgent definition');
+    if(!info.isFile()) throw refusal('Refusing non-regular LaunchAgent definition');
     const bytes=await readFile(paths.plistPath,'utf8');
     validateManagedDefinition(bytes,input);
     return {exists:true,bytes};
@@ -243,7 +256,11 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     return {enabled:definition.exists,loaded:current.loaded,running:current.running,...(current.pid===undefined?{}:{pid:current.pid}),...(current.lastExitStatus===undefined?{}:{lastExitStatus:current.lastExitStatus})};
   }
 
-  async function restore(previous:{exists:boolean;bytes?:string},wasLoaded:boolean):Promise<void>{
+  async function restore(previous:{exists:boolean;bytes?:string},wasLoaded:boolean,newlyLoaded:boolean):Promise<void>{
+    if(newlyLoaded){
+      const bootout=await runner([launchctl,'bootout',paths.service]);
+      if(bootout.code!==0) throw publicError('restore');
+    }
     try{
       if(previous.exists&&previous.bytes!==undefined) await writeMode0600(paths.plistPath,previous.bytes);
       else await unlink(paths.plistPath);
@@ -267,7 +284,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     enable:()=>safeLifecycle('enable',async():Promise<DaemonStatus>=>{
       const previous=await readDefinition(paths,input);
       const initial=await inspect();
-      if(initial.loaded&&!previous.exists) throw new Error('Refusing to replace an unowned loaded LaunchAgent');
+      if(initial.loaded&&!previous.exists) throw refusal('Refusing to replace an unowned loaded LaunchAgent');
       const desired=renderLaunchAgent(input);
       const changed=previous.bytes!==desired;
       if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
@@ -276,13 +293,15 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
         const bootout=await runner([launchctl,'bootout',paths.service]);
         if(bootout.code!==0) throw publicError('disable');
       }
+      let newlyLoaded=false;
       try{
         if(changed) await publishDefinition(paths,desired,runner);
         const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
         if(bootstrap.code!==0) throw publicError('enable');
+        newlyLoaded=true;
         return await status();
       }catch(error){
-        try{await restore(previous,initial.loaded);}catch{ /* Preserve the primary public failure. */ }
+        try{await restore(previous,initial.loaded,newlyLoaded);}catch{ /* Preserve the primary public failure. */ }
         throw error;
       }
     }),
@@ -290,7 +309,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       const previous=await readDefinition(paths,input);
       const current=await inspect();
       if(!previous.exists){
-        if(current.loaded) throw new Error('Refusing to disable an unowned loaded LaunchAgent');
+        if(current.loaded) throw refusal('Refusing to disable an unowned loaded LaunchAgent');
         return {enabled:false,loaded:false,running:false};
       }
       if(current.loaded){
@@ -303,7 +322,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     restart:()=>safeLifecycle('restart',async():Promise<DaemonStatus>=>{
       const previous=await readDefinition(paths,input);
       const current=await inspect();
-      if(!previous.exists||!current.loaded) throw new Error('Streamhub runtime is not enabled');
+      if(!previous.exists||!current.loaded) throw refusal('Streamhub runtime is not enabled');
       rollRuntimeLog(paths);
       const kickstart=await runner([launchctl,'kickstart','-k',paths.service]);
       if(kickstart.code!==0) throw publicError('restart');

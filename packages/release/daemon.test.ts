@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {lstat,mkdtemp,mkdir,readFile,rm,stat,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {createRuntimeDaemon,prepareRuntimeLog,readRuntimeLog,type CommandResult} from './daemon';
 import {launchAgentPaths,renderLaunchAgent,type LaunchAgentInput} from './launch-agent';
 
@@ -10,7 +10,7 @@ type Existing='owned'|'foreign'|'symlink';
 type Fixture={
   input:LaunchAgentInput;
   paths:ReturnType<typeof launchAgentPaths>;
-  recorded:{commands:string[][];loaded:boolean;running:boolean;failBootstrap:number;failBootout:boolean};
+  recorded:{commands:string[][];loaded:boolean;running:boolean;definition?:string;failBootstrap:number;failBootout:boolean};
   daemon:ReturnType<typeof createRuntimeDaemon>;
   cleanup():Promise<void>;
 };
@@ -40,6 +40,7 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
     commands:[] as string[][],
     loaded:options.loaded??false,
     running:options.running??false,
+    definition:options.loaded&&options.existing==='owned'?renderLaunchAgent(input):undefined,
     failBootstrap:options.failBootstrap??0,
     failBootout:options.failBootout??false,
   };
@@ -55,18 +56,21 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
         : {code:113,stdout:'',stderr:missingService};
     }
     if(argv[1]==='bootstrap'){
+      if(recorded.loaded) return {code:1,stdout:'private conflict',stderr:'same-label service already loaded'};
       if(recorded.failBootstrap>0){
         recorded.failBootstrap--;
         return {code:1,stdout:'private output',stderr:'private failure'};
       }
       recorded.loaded=true;
       recorded.running=true;
+      recorded.definition=await readFile(argv[3]!,'utf8');
       return {code:0,stdout:'',stderr:''};
     }
     if(argv[1]==='bootout'){
       if(recorded.failBootout) return {code:1,stdout:'private output',stderr:'private failure'};
       recorded.loaded=false;
       recorded.running=false;
+      recorded.definition=undefined;
       return {code:0,stdout:'',stderr:''};
     }
     if(argv[1]==='kickstart'){
@@ -159,10 +163,12 @@ test('failed post-bootstrap status verification restores prior bytes and loaded 
   const previous=renderLaunchAgent(oldInput);
   try{
     await writeFile(h.paths.plistPath,previous);
+    h.recorded.definition=previous;
     await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
     expect(h.recorded.loaded).toBe(true);
-    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','print','bootstrap']);
+    expect(h.recorded.definition).toBe(previous);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','print','bootout','bootstrap']);
   }finally{await h.cleanup();}
 });
 
@@ -262,9 +268,30 @@ test('managed log helpers reject forged paths without touching arbitrary files',
   }finally{await h.cleanup();}
 });
 
+test('managed log helpers reject a fully forged traversal-bearing path bundle',async()=>{
+  const h=await daemonFixture();
+  const home=`${tmpdir()}/streamhub-forged/../outside-home`;
+  const data=`${home}/Library/Application Support/Streamhub/data`;
+  const forged={
+    label:h.paths.label,
+    domain:h.paths.domain,
+    service:h.paths.service,
+    plistPath:`${home}/Library/LaunchAgents/com.streamhub.runtime.plist`,
+    configPath:`${data}/config.json`,
+    logPath:`${data}/logs/runtime.log`,
+    previousLogPath:`${data}/logs/runtime.log.1`,
+    runtimePath:`${tmpdir()}/streamhub-forged/../outside-app/Streamhub/app/1.0.0/app/runtime.ts`,
+  };
+  try{
+    expect(()=>prepareRuntimeLog(forged)).toThrow('managed runtime log paths');
+    expect(()=>readRuntimeLog(forged)).toThrow('managed runtime log paths');
+    await expect(lstat(forged.logPath.replace('/../','/'))).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
 test('public boundaries redact runner failures and path details',async()=>{
   const h=await daemonFixture();
-  const runner=async():Promise<CommandResult>=>{throw new Error('token=private path=/private/secret');};
+  const runner=async():Promise<CommandResult>=>{throw new Error('Refusing token=private path=/private/secret');};
   const daemon=createRuntimeDaemon({...h.input,runner});
   try{
     for(const operation of [()=>daemon.status(),()=>daemon.enable(),()=>daemon.disable(),()=>daemon.restart()]){
@@ -272,5 +299,17 @@ test('public boundaries redact runner failures and path details',async()=>{
       expect(error?.message).not.toContain('private');
       expect(error?.message).not.toContain('/private');
     }
+  }finally{await h.cleanup();}
+});
+
+test('managed log helpers redact filesystem failures',async()=>{
+  const h=await daemonFixture();
+  try{
+    const logDirectory=join(h.input.home,'Library/Application Support/Streamhub/data/logs');
+    await mkdir(dirname(logDirectory),{recursive:true});
+    await writeFile(logDirectory,'not a directory');
+    const error=(()=>{try{prepareRuntimeLog(h.paths);}catch(value){return value as Error;}})();
+    expect(error?.message).toBe('Unable to prepare Streamhub runtime log');
+    expect(error?.message).not.toContain(h.input.home);
   }finally{await h.cleanup();}
 });
