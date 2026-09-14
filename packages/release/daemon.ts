@@ -1,7 +1,7 @@
 import {closeSync,chmodSync,lstatSync,mkdirSync,openSync,readSync,renameSync,unlinkSync} from 'node:fs';
 import {lstat,mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
 import {dirname} from 'node:path';
-import {launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,runtimeLabel,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
+import {isManagedLaunchAgentPaths,launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,runtimeLabel,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
 
 export type CommandResult={code:number;stdout:string;stderr:string};
 export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
@@ -94,6 +94,7 @@ function inspectLog(path:string):ReturnType<typeof lstatSync>|undefined{
 }
 
 function assertManagedLogPaths(paths:LaunchAgentPaths):void{
+  if(!isManagedLaunchAgentPaths(paths)) throw refusal('Refusing unmanaged runtime log paths');
   const domain=paths.domain.match(/^gui\/([1-9]\d*)$/);
   const plistSuffix=`/Library/LaunchAgents/${runtimeLabel}.plist`;
   const isNormalizedAbsolute=(path:string):boolean=>path.startsWith('/')&&!path.includes('\0')&&path.split('/').every((segment,index)=>index===0||Boolean(segment)&&segment!=='.'&&segment!=='..');

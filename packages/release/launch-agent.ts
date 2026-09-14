@@ -18,6 +18,8 @@ export type LaunchAgentPaths={
   runtimePath:string;
 };
 
+const managedPathObjects=new WeakSet<LaunchAgentPaths>();
+
 export type LaunchctlState={
   loaded:boolean;
   running:boolean;
@@ -83,7 +85,7 @@ export function launchAgentPaths(input:LaunchAgentInput):LaunchAgentPaths{
   validateInput(input);
   const dataPath=underHome(input.home,'Library/Application Support/Streamhub/data');
   const domain=`gui/${input.uid}`;
-  return {
+  const paths=Object.freeze({
     label:runtimeLabel,
     domain,
     service:`${domain}/${runtimeLabel}`,
@@ -92,7 +94,32 @@ export function launchAgentPaths(input:LaunchAgentInput):LaunchAgentPaths{
     logPath:`${dataPath}/logs/runtime.log`,
     previousLogPath:`${dataPath}/logs/runtime.log.1`,
     runtimePath:`${input.packageRoot}/app/runtime.ts`,
-  };
+  });
+  managedPathObjects.add(paths);
+  return paths;
+}
+
+function normalizedAbsolutePath(path:string):boolean{
+  return path.startsWith('/')&&!path.includes('\0')&&path.split('/').every((segment,index)=>index===0||Boolean(segment)&&segment!=='.'&&segment!=='..');
+}
+
+export function isManagedLaunchAgentPaths(value:unknown):value is LaunchAgentPaths{
+  if(typeof value!=='object'||value===null) return false;
+  const paths=value as LaunchAgentPaths;
+  if(!Object.isFrozen(paths)||!managedPathObjects.has(paths)) return false;
+  const domain=paths.domain.match(/^gui\/([1-9]\d*)$/);
+  const plistSuffix=`/Library/LaunchAgents/${runtimeLabel}.plist`;
+  if(!domain||!Number.isSafeInteger(Number(domain[1]))||!paths.plistPath.endsWith(plistSuffix)) return false;
+  const home=paths.plistPath.slice(0,-plistSuffix.length);
+  const dataPath=`${home}/Library/Application Support/Streamhub/data`;
+  const runtimeSuffix='/app/runtime.ts';
+  const packageRoot=paths.runtimePath.endsWith(runtimeSuffix)?paths.runtimePath.slice(0,-runtimeSuffix.length):'';
+  const applicationRoot=packageRoot.match(/^(.*\/Streamhub)\/app\/[^/]+$/)?.[1];
+  if(!applicationRoot) return false;
+  return paths.label===runtimeLabel&&paths.service===`${paths.domain}/${runtimeLabel}`&&
+    paths.configPath===`${dataPath}/config.json`&&paths.logPath===`${dataPath}/logs/runtime.log`&&
+    paths.previousLogPath===`${dataPath}/logs/runtime.log.1`&&
+    [paths.plistPath,paths.configPath,paths.logPath,paths.previousLogPath,paths.runtimePath,packageRoot,applicationRoot].every(normalizedAbsolutePath);
 }
 
 export function renderLaunchAgent(input:LaunchAgentInput):string{

@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,validateOwnedLaunchAgent} from './launch-agent';
+import {isManagedLaunchAgentPaths,launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,validateOwnedLaunchAgent} from './launch-agent';
 
 const input={
   home:'/Users/example',uid:501,bunPath:'/opt/homebrew/bin/bun',
@@ -15,6 +15,16 @@ test('LaunchAgent paths remain inside the user and installed Streamhub roots',()
     previousLogPath:'/Users/example/Library/Application Support/Streamhub/data/logs/runtime.log.1',
     runtimePath:'/Users/example/Library/Application Support/Streamhub/app/0.1.0-preview.1/app/runtime.ts',
   });
+});
+
+test('only the frozen paths object derived in this process has managed provenance',()=>{
+  const paths=launchAgentPaths(input);
+  const copy={...paths};
+  const mutated={...paths,logPath:'/tmp/managed-looking/runtime.log'};
+  expect(Object.isFrozen(paths)).toBe(true);
+  expect(isManagedLaunchAgentPaths(paths)).toBe(true);
+  expect(isManagedLaunchAgentPaths(copy)).toBe(false);
+  expect(isManagedLaunchAgentPaths(mutated)).toBe(false);
 });
 
 test('rendered plist is escaped, owned, absolute and round-trips validation',()=>{

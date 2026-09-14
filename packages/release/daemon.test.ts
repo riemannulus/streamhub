@@ -289,6 +289,37 @@ test('managed log helpers reject a fully forged traversal-bearing path bundle',a
   }finally{await h.cleanup();}
 });
 
+test('managed log helpers reject a clean fully forged normalized path bundle',async()=>{
+  const h=await daemonFixture();
+  const home=join(tmpdir(),`streamhub-forged-${crypto.randomUUID()}`);
+  const data=`${home}/Library/Application Support/Streamhub/data`;
+  const forged={
+    label:h.paths.label,
+    domain:h.paths.domain,
+    service:h.paths.service,
+    plistPath:`${home}/Library/LaunchAgents/com.streamhub.runtime.plist`,
+    configPath:`${data}/config.json`,
+    logPath:`${data}/logs/runtime.log`,
+    previousLogPath:`${data}/logs/runtime.log.1`,
+    runtimePath:`${home}/Streamhub/app/1.0.0/app/runtime.ts`,
+  };
+  try{
+    expect(()=>prepareRuntimeLog(forged)).toThrow('managed runtime log paths');
+    expect(()=>readRuntimeLog(forged)).toThrow('managed runtime log paths');
+    await expect(lstat(forged.logPath)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
+test('managed log helpers reject clones of legitimate paths',async()=>{
+  const h=await daemonFixture();
+  const copy={...h.paths};
+  try{
+    expect(()=>prepareRuntimeLog(copy)).toThrow('managed runtime log paths');
+    expect(()=>readRuntimeLog(copy)).toThrow('managed runtime log paths');
+    await expect(lstat(h.paths.logPath)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
 test('public boundaries redact runner failures and path details',async()=>{
   const h=await daemonFixture();
   const runner=async():Promise<CommandResult>=>{throw new Error('Refusing token=private path=/private/secret');};
