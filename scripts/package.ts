@@ -1,7 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {cpSync,existsSync,lstatSync,mkdirSync,mkdtempSync,readdirSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename,dirname,join,relative,resolve} from 'node:path';
+import {basename,dirname,extname,join,relative,resolve} from 'node:path';
 import {createReleaseManifest,validateReleaseManifest} from '../packages/release/manifest';
 import {packageVersion,releaseTarget} from '../packages/release/version';
 
@@ -18,12 +18,22 @@ export type PackageOptions={
 export type PackageResult={root:string;archive:string;archiveSha256:string;version:string;target:typeof releaseTarget};
 
 const packageDirectory=`streamhub-${packageVersion}-${releaseTarget}`;
-const forbidden=/(^|\/)(\.streamhub|\.git|logs|tests?|__tests__)(\/|$)|\.test\.|\.map$/;
 const runtimeSourceDirectories=['actions','core','host','presentation','streamdeck','studio'] as const;
+const textExtensions=new Set(['.cjs','.css','.html','.js','.json','.md','.mjs','.plist','.sh','.ts','.txt','.xml','.yaml','.yml']);
 const checksum=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex');
 const copy=(source:string,target:string)=>{mkdirSync(dirname(target),{recursive:true});cpSync(source,target,{recursive:true,preserveTimestamps:true});};
 const run=async(command:string[],cwd:string)=>{const child=Bun.spawn(command,{cwd,stdout:'pipe',stderr:'pipe',env:process.env});const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);if(code!==0)throw new Error(`Package command failed: ${command.slice(0,3).join(' ')}\n${stderr||stdout}`);};
 const assertTarget=(platform:string,arch:string)=>{if(platform!=='darwin'||arch!=='arm64')throw new Error('This preview package supports macOS arm64 only');};
+
+function isSensitiveDataFile(path:string):boolean{
+  const name=basename(path).toLowerCase(),extension=extname(name),dataExtension=['.env','.ini','.json','.toml','.txt','.yaml','.yml'].includes(extension);
+  if((name==='config'||name.startsWith('config.'))&&dataExtension)return true;
+  return /(?:credential|private|secret|token)/.test(name)&&(extension===''||dataExtension);
+}
+
+function isForbiddenPath(path:string):boolean{
+  return /(^|\/)(\.streamhub|\.git|logs|private|secrets?|tests?|__tests__)(\/|$)|\.test\.|\.map$|\.plist$/.test(path)||isSensitiveDataFile(path);
+}
 
 export function relativeFiles(root:string):string[]{
   const files:string[]=[];
@@ -32,9 +42,13 @@ export function relativeFiles(root:string):string[]{
 }
 
 const prune=(root:string)=>{
-  const visit=(directory:string)=>{for(const entry of readdirSync(directory,{withFileTypes:true})){const path=join(directory,entry.name),name=relative(root,path);if(forbidden.test(name)){rmSync(path,{recursive:entry.isDirectory()&&!entry.isSymbolicLink()});continue;}if(entry.isDirectory())visit(path);}};
+  const visit=(directory:string)=>{for(const entry of readdirSync(directory,{withFileTypes:true})){const path=join(directory,entry.name),name=relative(root,path);if(isForbiddenPath(name)){rmSync(path,{recursive:entry.isDirectory()&&!entry.isSymbolicLink()});continue;}if(entry.isDirectory())visit(path);}};
   visit(root);
 };
+
+function buildMachinePath(root:string):string|undefined{
+  return relativeFiles(root).find(path=>textExtensions.has(extname(path).toLowerCase())&&readFileSync(join(root,path),'utf8').includes('/Users/'));
+}
 
 const writeChecksums=(root:string)=>{
   const lines=relativeFiles(root).filter(path=>path!=='SHA256SUMS').map(path=>`${checksum(join(root,path))}  ${path}`);
@@ -85,7 +99,8 @@ export async function assemblePreview(options:PackageOptions={}):Promise<Package
     writeFileSync(join(stagedRoot,'manifest.json'),JSON.stringify(createReleaseManifest({gitCommit,builtAt,pluginVersion:pluginManifest.Version}),null,2)+'\n');
     await (options.installDependencies??defaultInstallDependencies)({repositoryRoot,appRoot:join(stagedRoot,'app')});
     prune(stagedRoot);
-    const leaked=relativeFiles(stagedRoot).find(path=>forbidden.test(path));if(leaked)throw new Error(`Forbidden package file: ${leaked}`);
+    const leaked=relativeFiles(stagedRoot).find(isForbiddenPath);if(leaked)throw new Error(`Forbidden package file: ${leaked}`);
+    const machinePath=buildMachinePath(stagedRoot);if(machinePath)throw new Error(`Build-machine absolute path in package file: ${machinePath}`);
     validateReleaseManifest(JSON.parse(readFileSync(join(stagedRoot,'manifest.json'),'utf8')));writeChecksums(stagedRoot);
     const verified=verifyChecksums(stagedRoot);if(!verified.valid)throw new Error('Package checksum verification failed');
     await (options.archive??defaultArchive)({sourceRoot:staging,directoryName:packageDirectory,archivePath:stagedArchive});
