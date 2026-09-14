@@ -63,6 +63,10 @@ function valueAfterKey(xml:string,key:string):string|undefined{
   return match?.[1]===undefined?undefined:unescapeXml(match[1]);
 }
 
+function packageApplicationRoot(packageRoot:string):string|undefined{
+  return packageRoot.match(/^(.*)\/app\/[^/]+$/)?.[1];
+}
+
 function legacyOwnedInput(xml:string,input:LaunchAgentInput):LaunchAgentInput|undefined{
   const argumentsMatch=xml.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>\s*<string>([^<]*)<\/string>\s*<\/array>/);
   const packageRoot=valueAfterKey(xml,'WorkingDirectory');
@@ -70,6 +74,7 @@ function legacyOwnedInput(xml:string,input:LaunchAgentInput):LaunchAgentInput|un
   const candidate={...input,bunPath:unescapeXml(argumentsMatch[1]!),packageRoot:unescapeXml(packageRoot)};
   try{
     validateOwnedLaunchAgent(xml,candidate);
+    if(packageApplicationRoot(candidate.packageRoot)!==packageApplicationRoot(input.packageRoot)) return undefined;
     return candidate;
   }catch{
     return undefined;
@@ -213,29 +218,37 @@ async function defaultPidRunning(pid:number):Promise<boolean>{
   }
 }
 
-async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<{exists:boolean;bytes?:string}>{
+type Definition={exists:false}|{exists:true;bytes:string;identity:{device:number;inode:number}};
+
+async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<Definition>{
   try{
     const info=await lstat(paths.plistPath);
     if(info.isSymbolicLink()) throw refusal('Refusing symbolic LaunchAgent definition');
     if(!info.isFile()) throw refusal('Refusing non-regular LaunchAgent definition');
     const bytes=await readFile(paths.plistPath,'utf8');
     validateManagedDefinition(bytes,input);
-    return {exists:true,bytes};
+    return {exists:true,bytes,identity:{device:info.dev,inode:info.ino}};
   }catch(error){
     if(isMissing(error)) return {exists:false};
     throw error;
   }
 }
 
-async function writeMode0600(path:string,bytes:string):Promise<void>{
-  const file=await open(path,'w',0o600);
-  try{
-    await file.writeFile(bytes);
-    await file.chmod(0o600);
-  }finally{await file.close();}
+async function assertDefinitionUnchanged(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Definition):Promise<Definition>{
+  const current=await readDefinition(paths,input);
+  if(expected.exists!==current.exists||
+    (expected.exists&&current.exists&&(expected.bytes!==current.bytes||expected.identity.device!==current.identity.device||expected.identity.inode!==current.identity.inode))){
+    throw refusal('Refusing to modify a changed LaunchAgent definition');
+  }
+  return current;
 }
 
-async function publishDefinition(paths:LaunchAgentPaths,bytes:string,runner:CommandRunner):Promise<void>{
+async function removeDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Definition):Promise<void>{
+  const current=await assertDefinitionUnchanged(paths,input,expected);
+  if(current.exists) await unlink(paths.plistPath);
+}
+
+async function publishDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,bytes:string,runner:CommandRunner,expected:Definition,validate=true):Promise<Definition>{
   await mkdir(dirname(paths.plistPath),{recursive:true,mode:0o700});
   const temporary=`${paths.plistPath}.${crypto.randomUUID()}.tmp`;
   try{
@@ -244,10 +257,13 @@ async function publishDefinition(paths:LaunchAgentPaths,bytes:string,runner:Comm
       await file.writeFile(bytes);
       await file.chmod(0o600);
     }finally{await file.close();}
-    const validation=await runner([plutil,'-lint',temporary]);
-    if(validation.code!==0) throw publicError('validate');
+    if(validate){
+      const validation=await runner([plutil,'-lint',temporary]);
+      if(validation.code!==0) throw publicError('validate');
+    }
+    await assertDefinitionUnchanged(paths,input,expected);
     await rename(temporary,paths.plistPath);
-    chmodSync(paths.plistPath,0o600);
+    return await readDefinition(paths,input);
   }catch(error){
     try{await unlink(temporary);}catch(unlinkError){if(!isMissing(unlinkError)) throw unlinkError;}
     throw error;
@@ -298,15 +314,17 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     }
   }
 
-  async function restore(previous:{exists:boolean;bytes?:string},wasLoaded:boolean,newlyLoaded:boolean):Promise<void>{
+  async function restore(previous:Definition,wasLoaded:boolean,newlyLoaded:boolean,published:Definition|undefined):Promise<void>{
     if(newlyLoaded){
       await bootoutAndWait(await inspect());
     }
-    try{
-      if(previous.exists&&previous.bytes!==undefined) await writeMode0600(paths.plistPath,previous.bytes);
-      else await unlink(paths.plistPath);
-    }catch(error){if(!isMissing(error)) throw error;}
-    if(wasLoaded){
+    if(published){
+      if(previous.exists) await publishDefinition(paths,input,previous.bytes,runner,published,false);
+      else await removeDefinition(paths,input,published);
+    }else if(previous.exists){
+      await assertDefinitionUnchanged(paths,input,previous);
+    }
+    if(wasLoaded&&previous.exists){
       const result=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
       if(result.code!==0) throw publicError('restore');
     }
@@ -327,22 +345,22 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       const initial=await inspect();
       if(initial.loaded&&!previous.exists) throw refusal('Refusing to replace an unowned loaded LaunchAgent');
       const desired=renderLaunchAgent(input);
-      const changed=previous.bytes!==desired;
+      const changed=!previous.exists||previous.bytes!==desired;
       if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
       if(initial.loaded) assertObservableRuntimeExit(initial);
       rollRuntimeLog(paths);
       if(initial.loaded){
         await bootoutAndWait(initial);
       }
-      let newlyLoaded=false;
+      let newlyLoaded=false,published:Definition|undefined;
       try{
-        if(changed) await publishDefinition(paths,desired,runner);
+        if(changed) published=await publishDefinition(paths,input,desired,runner,previous);
         const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
         if(bootstrap.code!==0) throw publicError('enable');
         newlyLoaded=true;
         return await status();
       }catch(error){
-        try{await restore(previous,initial.loaded,newlyLoaded);}catch{ /* Preserve the primary public failure. */ }
+        try{await restore(previous,initial.loaded,newlyLoaded,published);}catch{ /* Preserve the primary public failure. */ }
         throw error;
       }
     }),
@@ -356,7 +374,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       if(current.loaded){
         await bootoutAndWait(current);
       }
-      await unlink(paths.plistPath);
+      await removeDefinition(paths,input,previous);
       return {enabled:false,loaded:false,running:false};
     }),
     restart:()=>safeLifecycle('restart',async():Promise<DaemonStatus>=>{

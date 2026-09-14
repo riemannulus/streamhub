@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {lstat,mkdtemp,mkdir,readFile,rm,stat,symlink,writeFile} from 'node:fs/promises';
+import {lstat,mkdtemp,mkdir,readFile,rename,rm,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createRuntimeDaemon,prepareRuntimeLog,readRuntimeLog,type CommandResult} from './daemon';
@@ -17,7 +17,7 @@ type Fixture={
 
 const missingService='Could not find service "com.streamhub.runtime" in domain for system';
 
-async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;reportedPid?:number;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number}={}):Promise<Fixture>{
+async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;reportedPid?:number;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number;duringBootoutWait?:(paths:ReturnType<typeof launchAgentPaths>)=>Promise<void>}={}):Promise<Fixture>{
   const directory=await mkdtemp(join(tmpdir(),'streamhub-daemon-'));
   const input:LaunchAgentInput={
     home:join(directory,'home'),
@@ -46,7 +46,7 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
     sleeps:[],
     bootstrapBeforePriorPidExit:false,
   };
-  let printCount=0,now=0,bootoutRequested=false,unloadPollsRemaining=options.delayedUnloadPolls??0,pidExitPollsRemaining=options.delayedPidExitPolls??0,priorPidExited=!(recorded.loaded&&recorded.running);
+  let printCount=0,now=0,bootoutRequested=false,unloadPollsRemaining=options.delayedUnloadPolls??0,pidExitPollsRemaining=options.delayedPidExitPolls??0,priorPidExited=!(recorded.loaded&&recorded.running),duringBootoutWait=options.duringBootoutWait;
   const runner=async(argv:readonly string[]):Promise<CommandResult>=>{
     recorded.commands.push([...argv]);
     if(argv[0]==='/usr/bin/plutil') return {code:0,stdout:'',stderr:''};
@@ -84,7 +84,7 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
   };
   return {
     input,paths,recorded,
-    daemon:createRuntimeDaemon({...input,runner,bootoutTimeoutMs:options.bootoutTimeoutMs,now:()=>now,sleep:async milliseconds=>{recorded.sleeps.push(milliseconds);now+=milliseconds;},isPidRunning:async()=>{
+    daemon:createRuntimeDaemon({...input,runner,bootoutTimeoutMs:options.bootoutTimeoutMs,now:()=>now,sleep:async milliseconds=>{recorded.sleeps.push(milliseconds);now+=milliseconds;const mutate=duringBootoutWait;duringBootoutWait=undefined;await mutate?.(paths);},isPidRunning:async()=>{
       try{await lstat(paths.plistPath);recorded.plistPresentDuringPidWait=true;}catch{recorded.plistPresentDuringPidWait=false;}
       if(recorded.loaded)return true;
       if(pidExitPollsRemaining-- > 0)return true;
@@ -155,6 +155,39 @@ test('disable waits for the unloaded service and prior PID before deleting its p
   }finally{await h.cleanup();}
 });
 
+test('disable preserves a same-content plist replacement after bootout',async()=>{
+  let definition='';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
+    const replacement=`${paths.plistPath}.replacement`;
+    await writeFile(replacement,definition);
+    await rename(replacement,paths.plistPath);
+  }});
+  try{
+    definition=await readFile(h.paths.plistPath,'utf8');
+    const originalIdentity=await lstat(h.paths.plistPath);
+    await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(definition);
+    expect((await lstat(h.paths.plistPath)).ino).not.toBe(originalIdentity.ino);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
+  }finally{await h.cleanup();}
+});
+
+test('disable preserves a linked plist after bootout',async()=>{
+  let target='';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
+    target=`${paths.plistPath}.foreign`;
+    await writeFile(target,'foreign definition');
+    await unlink(paths.plistPath);
+    await symlink(target,paths.plistPath);
+  }});
+  try{
+    await expect(h.daemon.disable()).rejects.toThrow('symbolic LaunchAgent definition');
+    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(target,'utf8')).toBe('foreign definition');
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
+  }finally{await h.cleanup();}
+});
+
 test('disable fails closed without bootout when a running service has no valid PID',async()=>{
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,reportedPid:0});
   try{
@@ -174,6 +207,42 @@ test('replacement enable waits for old unload and PID exit before publishing or 
     expect(h.recorded.sleeps).toEqual([50,50]);
     expect(h.recorded.bootstrapBeforePriorPidExit).toBe(false);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','print','-lint','bootstrap','print']);
+  }finally{await h.cleanup();}
+});
+
+test('changed enable preserves a same-content plist replacement after bootout',async()=>{
+  let definition='',replacementIdentity=0;
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
+    const replacement=`${paths.plistPath}.replacement`;
+    await writeFile(replacement,definition);
+    await rename(replacement,paths.plistPath);
+    replacementIdentity=(await lstat(paths.plistPath)).ino;
+  }});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    definition=renderLaunchAgent(oldInput);
+    await writeFile(h.paths.plistPath,definition);
+    await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(definition);
+    expect((await lstat(h.paths.plistPath)).ino).toBe(replacementIdentity);
+  }finally{await h.cleanup();}
+});
+
+test('changed enable preserves a linked plist after bootout',async()=>{
+  let target='';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
+    target=`${paths.plistPath}.foreign`;
+    await writeFile(target,'foreign definition');
+    await unlink(paths.plistPath);
+    await symlink(target,paths.plistPath);
+  }});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+    await expect(h.daemon.enable()).rejects.toThrow('symbolic LaunchAgent definition');
+    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(target,'utf8')).toBe('foreign definition');
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','-lint']);
   }finally{await h.cleanup();}
 });
 
@@ -224,6 +293,24 @@ test('foreign and linked definitions cause no launchctl mutation',async()=>{
     const h=await daemonFixture({existing});
     try{
       await expect(h.daemon.enable()).rejects.toThrow(existing==='foreign'?'owned':'symbolic');
+      expect(h.recorded.commands).toEqual([]);
+    }finally{await h.cleanup();}
+  }
+});
+
+test('legacy ownership never crosses to another Streamhub application root',async()=>{
+  for(const operation of ['enable','disable'] as const){
+    const h=await daemonFixture();
+    const legacy={
+      ...h.input,
+      bunPath:'/opt/legacy/bin/bun',
+      packageRoot:join(h.input.home,'Library/Application Support/Streamhub/app/0.9.0'),
+    };
+    const definition=renderLaunchAgent(legacy);
+    try{
+      await writeFile(h.paths.plistPath,definition);
+      await expect(operation==='enable'?h.daemon.enable():h.daemon.disable()).rejects.toThrow('unowned LaunchAgent');
+      expect(await readFile(h.paths.plistPath,'utf8')).toBe(definition);
       expect(h.recorded.commands).toEqual([]);
     }finally{await h.cleanup();}
   }

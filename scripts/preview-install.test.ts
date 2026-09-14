@@ -115,6 +115,19 @@ test('a foreign expected plist refuses a fresh install before payload publicatio
   }finally{rmSync(root,{recursive:true,force:true});}
 });
 
+test('a legacy plist from another Streamhub application root refuses fresh install before payload publication',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-legacy-foreign-install-')),packageRoot=join(root,'package'),prefix=join(root,'prefix'),home=join(root,'home'),commands:string[][]=[];
+  packageFixture(packageRoot);
+  const runner=async(argv:readonly string[]):Promise<CommandResult>=>{commands.push([...argv]);return{code:113,stdout:'',stderr:'Could not find service'};};
+  const installedRoot=join(prefix,'Application Support','Streamhub','app',packageVersion),daemonFor=(targetRoot:string)=>createRuntimeDaemon({home,uid:501,bunPath:'/bin/bun',packageRoot:targetRoot,runner}),plistPath=daemonFor(installedRoot).paths.plistPath;
+  const legacy={home,uid:501,bunPath:'/opt/legacy/bin/bun',packageRoot:join(home,'Library/Application Support/Streamhub/app/0.9.0')};
+  try{
+    mkdirSync(dirname(plistPath),{recursive:true});writeFileSync(plistPath,renderLaunchAgent(legacy));
+    await expect(runPreviewInstaller({argv:['install','--prefix',prefix],packageRoot,home,daemonFor,write:()=>{}})).rejects.toThrow('unowned LaunchAgent');
+    expect(existsSync(installedRoot)).toBe(false);expect(readFileSync(plistPath,'utf8')).toBe(renderLaunchAgent(legacy));expect(commands).toEqual([]);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test('a dangling expected plist link refuses a fresh install before payload publication',async()=>{
   const root=mkdtempSync(join(tmpdir(),'streamhub-linked-install-')),packageRoot=join(root,'package'),prefix=join(root,'prefix'),home=join(root,'home'),commands:string[][]=[];
   packageFixture(packageRoot);
