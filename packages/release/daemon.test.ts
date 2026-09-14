@@ -1,8 +1,8 @@
 import {expect,test} from 'bun:test';
-import {lstat,mkdtemp,mkdir,readFile,rename,rm,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {lstat,mkdtemp,mkdir,readFile,readdir,rename,rm,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
-import {createRuntimeDaemon,prepareRuntimeLog,readRuntimeLog,type CommandResult} from './daemon';
+import {createRuntimeDaemon,prepareRuntimeLog,readRuntimeLog,type CommandResult,type DaemonTestHooks} from './daemon';
 import {launchAgentPaths,renderLaunchAgent,type LaunchAgentInput} from './launch-agent';
 
 type Existing='owned'|'foreign'|'symlink';
@@ -17,7 +17,7 @@ type Fixture={
 
 const missingService='Could not find service "com.streamhub.runtime" in domain for system';
 
-async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;reportedPid?:number;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number;duringBootoutWait?:(paths:ReturnType<typeof launchAgentPaths>)=>Promise<void>}={}):Promise<Fixture>{
+async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;reportedPid?:number;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number;duringBootoutWait?:(paths:ReturnType<typeof launchAgentPaths>)=>Promise<void>;testHooks?:DaemonTestHooks}={}):Promise<Fixture>{
   const directory=await mkdtemp(join(tmpdir(),'streamhub-daemon-'));
   const input:LaunchAgentInput={
     home:join(directory,'home'),
@@ -84,7 +84,7 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
   };
   return {
     input,paths,recorded,
-    daemon:createRuntimeDaemon({...input,runner,bootoutTimeoutMs:options.bootoutTimeoutMs,now:()=>now,sleep:async milliseconds=>{recorded.sleeps.push(milliseconds);now+=milliseconds;const mutate=duringBootoutWait;duringBootoutWait=undefined;await mutate?.(paths);},isPidRunning:async()=>{
+    daemon:createRuntimeDaemon({...input,runner,bootoutTimeoutMs:options.bootoutTimeoutMs,testHooks:options.testHooks,now:()=>now,sleep:async milliseconds=>{recorded.sleeps.push(milliseconds);now+=milliseconds;const mutate=duringBootoutWait;duringBootoutWait=undefined;await mutate?.(paths);},isPidRunning:async()=>{
       try{await lstat(paths.plistPath);recorded.plistPresentDuringPidWait=true;}catch{recorded.plistPresentDuringPidWait=false;}
       if(recorded.loaded)return true;
       if(pidExitPollsRemaining-- > 0)return true;
@@ -100,7 +100,7 @@ test('enable validates, publishes, bootstraps, and leaves a live identical job u
   try{
     expect(await h.daemon.enable()).toEqual({enabled:true,loaded:true,running:true,pid:123,lastExitStatus:7});
     const temporary=h.recorded.commands[1]?.[2];
-    expect(temporary).toMatch(new RegExp(`^${h.paths.plistPath.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\..+\\.tmp$`));
+    expect(temporary).toMatch(new RegExp(`^${dirname(h.paths.plistPath).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\/\\.com\\.streamhub\\.runtime\\.candidate-.+\\/definition\\.plist$`));
     expect(h.recorded.commands).toEqual([
       ['/bin/launchctl','print',h.paths.service],
       ['/usr/bin/plutil','-lint',temporary!],
@@ -119,6 +119,36 @@ test('enable refuses an unowned loaded service when its plist is absent',async()
     await expect(h.daemon.enable()).rejects.toThrow('unowned loaded LaunchAgent');
     expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
     await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
+test('enable refuses a foreign definition swapped immediately before bootstrap',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({testHooks:{beforeBootstrap:async paths=>{await writeFile(paths.plistPath,foreign);}}});
+  try{
+    await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','-lint']);
+  }finally{await h.cleanup();}
+});
+
+test('enable binds its private candidate before exclusive publication',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({testHooks:{beforeCandidateLink:async(_paths,candidatePath)=>{await writeFile(candidatePath,foreign);}}});
+  try{
+    await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','-lint']);
+  }finally{await h.cleanup();}
+});
+
+test('enable never overwrites a foreign definition created before exclusive publication',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({testHooks:{beforeCandidateLink:async paths=>{await writeFile(paths.plistPath,foreign);}}});
+  try{
+    await expect(h.daemon.enable()).rejects.toThrow('publish over an existing LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','-lint']);
   }finally{await h.cleanup();}
 });
 
@@ -172,7 +202,7 @@ test('disable preserves a same-content plist replacement after bootout',async()=
   }finally{await h.cleanup();}
 });
 
-test('disable preserves a linked plist after bootout',async()=>{
+test('disable retains a linked plist in quarantine after bootout',async()=>{
   let target='';
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
     target=`${paths.plistPath}.foreign`;
@@ -181,10 +211,21 @@ test('disable preserves a linked plist after bootout',async()=>{
     await symlink(target,paths.plistPath);
   }});
   try{
-    await expect(h.daemon.disable()).rejects.toThrow('symbolic LaunchAgent definition');
-    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
+    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
     expect(await readFile(target,'utf8')).toBe('foreign definition');
+    expect((await readdir(dirname(h.paths.plistPath))).some(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'))).toBe(true);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
+  }finally{await h.cleanup();}
+});
+
+test('disable quarantines a foreign replacement at the final mutation point',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,testHooks:{beforeQuarantineMove:async(_context,paths)=>{await writeFile(paths.plistPath,foreign);}}});
+  try{
+    await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print']);
   }finally{await h.cleanup();}
 });
 
@@ -228,7 +269,19 @@ test('changed enable preserves a same-content plist replacement after bootout',a
   }finally{await h.cleanup();}
 });
 
-test('changed enable preserves a linked plist after bootout',async()=>{
+test('replacement quarantines a foreign replacement at the final mutation point',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,testHooks:{beforeQuarantineMove:async(context,paths)=>{if(context==='replace')await writeFile(paths.plistPath,foreign);}}});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+    await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print']);
+  }finally{await h.cleanup();}
+});
+
+test('changed enable retains a linked plist in quarantine after bootout',async()=>{
   let target='';
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
     target=`${paths.plistPath}.foreign`;
@@ -239,10 +292,11 @@ test('changed enable preserves a linked plist after bootout',async()=>{
   const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
   try{
     await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
-    await expect(h.daemon.enable()).rejects.toThrow('symbolic LaunchAgent definition');
-    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
     expect(await readFile(target,'utf8')).toBe('foreign definition');
-    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','-lint']);
+    expect((await readdir(dirname(h.paths.plistPath))).some(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'))).toBe(true);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
   }finally{await h.cleanup();}
 });
 
@@ -326,6 +380,18 @@ test('failed replacement bootstrap restores prior bytes and its loaded job',asyn
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
     expect(h.recorded.loaded).toBe(true);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap','bootstrap']);
+  }finally{await h.cleanup();}
+});
+
+test('rollback quarantines a foreign replacement at its final mutation point',async()=>{
+  const foreign='foreign definition';
+  const h=await daemonFixture({loaded:true,running:true,failBootstrap:1,testHooks:{beforeQuarantineMove:async(context,paths)=>{if(context==='rollback')await writeFile(paths.plistPath,foreign);}}});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+    await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap']);
   }finally{await h.cleanup();}
 });
 

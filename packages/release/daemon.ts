@@ -1,17 +1,23 @@
 import {closeSync,chmodSync,lstatSync,mkdirSync,openSync,readSync,renameSync,unlinkSync} from 'node:fs';
-import {lstat,mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
-import {dirname} from 'node:path';
+import {chmod,lstat,link,mkdir,mkdtemp,open,readFile,rename} from 'node:fs/promises';
+import {dirname,join} from 'node:path';
 import {isManagedLaunchAgentPaths,launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,runtimeLabel,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
 
 export type CommandResult={code:number;stdout:string;stderr:string};
 export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
 export type DaemonStatus={enabled:boolean;loaded:boolean;running:boolean;pid?:number;lastExitStatus?:number};
+export type DaemonTestHooks={
+  beforeQuarantineMove?(context:'disable'|'replace'|'rollback',paths:LaunchAgentPaths):Promise<void>;
+  beforeCandidateLink?(paths:LaunchAgentPaths,candidatePath:string):Promise<void>;
+  beforeBootstrap?(paths:LaunchAgentPaths):Promise<void>;
+};
 export type DaemonOptions=LaunchAgentInput&{
   runner?:CommandRunner;
   now?:()=>number;
   sleep?:(milliseconds:number)=>Promise<void>;
   isPidRunning?:(pid:number)=>Promise<boolean>;
   bootoutTimeoutMs?:number;
+  testHooks?:DaemonTestHooks;
 };
 export type RuntimeDaemon={
   enable():Promise<DaemonStatus>;
@@ -219,13 +225,14 @@ async function defaultPidRunning(pid:number):Promise<boolean>{
 }
 
 type Definition={exists:false}|{exists:true;bytes:string;identity:{device:number;inode:number}};
+type QuarantinedDefinition={path:string;definition:Extract<Definition,{exists:true}>};
 
-async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<Definition>{
+async function readDefinition(path:string,input:LaunchAgentInput):Promise<Definition>{
   try{
-    const info=await lstat(paths.plistPath);
+    const info=await lstat(path);
     if(info.isSymbolicLink()) throw refusal('Refusing symbolic LaunchAgent definition');
     if(!info.isFile()) throw refusal('Refusing non-regular LaunchAgent definition');
-    const bytes=await readFile(paths.plistPath,'utf8');
+    const bytes=await readFile(path,'utf8');
     validateManagedDefinition(bytes,input);
     return {exists:true,bytes,identity:{device:info.dev,inode:info.ino}};
   }catch(error){
@@ -234,40 +241,89 @@ async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Pro
   }
 }
 
-async function assertDefinitionUnchanged(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Definition):Promise<Definition>{
-  const current=await readDefinition(paths,input);
-  if(expected.exists!==current.exists||
-    (expected.exists&&current.exists&&(expected.bytes!==current.bytes||expected.identity.device!==current.identity.device||expected.identity.inode!==current.identity.inode))){
+function sameDefinition(left:Definition,right:Definition):boolean{
+  return left.exists===right.exists&&(!left.exists||!right.exists||
+    (left.bytes===right.bytes&&left.identity.device===right.identity.device&&left.identity.inode===right.identity.inode));
+}
+
+async function requireDefinition(path:string,input:LaunchAgentInput,expected:Definition):Promise<Extract<Definition,{exists:true}>>{
+  let current:Definition;
+  try{current=await readDefinition(path,input);}catch(error){
+    if(isDecisionError(error)) throw refusal('Refusing to modify a changed LaunchAgent definition');
+    throw error;
+  }
+  if(!current.exists||!sameDefinition(expected,current)){
     throw refusal('Refusing to modify a changed LaunchAgent definition');
   }
   return current;
 }
 
-async function removeDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Definition):Promise<void>{
-  const current=await assertDefinitionUnchanged(paths,input,expected);
-  if(current.exists) await unlink(paths.plistPath);
+async function privateDefinitionDirectory(paths:LaunchAgentPaths,kind:'candidate'|'quarantine'):Promise<string>{
+  // Keep private entries: Node exposes no inode-conditional unlink, so cleanup
+  // would recreate the same-UID check-then-delete race this protocol avoids.
+  const directory=await mkdtemp(join(dirname(paths.plistPath),`.${runtimeLabel}.${kind}-`));
+  await chmod(directory,0o700);
+  return directory;
 }
 
-async function publishDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,bytes:string,runner:CommandRunner,expected:Definition,validate=true):Promise<Definition>{
-  await mkdir(dirname(paths.plistPath),{recursive:true,mode:0o700});
-  const temporary=`${paths.plistPath}.${crypto.randomUUID()}.tmp`;
+async function restoreForeignQuarantine(paths:LaunchAgentPaths,quarantinePath:string):Promise<void>{
   try{
-    const file=await open(temporary,'wx',0o600);
-    try{
-      await file.writeFile(bytes);
-      await file.chmod(0o600);
-    }finally{await file.close();}
-    if(validate){
-      const validation=await runner([plutil,'-lint',temporary]);
-      if(validation.code!==0) throw publicError('validate');
-    }
-    await assertDefinitionUnchanged(paths,input,expected);
-    await rename(temporary,paths.plistPath);
-    return await readDefinition(paths,input);
+    const info=await lstat(quarantinePath);
+    if(!info.isFile()) return;
+    // link creates only when the public name remains absent; it never clobbers.
+    await link(quarantinePath,paths.plistPath);
   }catch(error){
-    try{await unlink(temporary);}catch(unlinkError){if(!isMissing(unlinkError)) throw unlinkError;}
+    if(isMissing(error)||(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='EEXIST')) return;
     throw error;
   }
+}
+
+async function quarantineDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Extract<Definition,{exists:true}>,context:'disable'|'replace'|'rollback',hooks:DaemonTestHooks|undefined):Promise<QuarantinedDefinition>{
+  const directory=await privateDefinitionDirectory(paths,'quarantine');
+  const path=join(directory,'definition.plist');
+  await hooks?.beforeQuarantineMove?.(context,paths);
+  try{
+    await rename(paths.plistPath,path);
+  }catch(error){
+    if(isMissing(error)) throw refusal('Refusing to modify a changed LaunchAgent definition');
+    throw error;
+  }
+  try{
+    const definition=await requireDefinition(path,input,expected);
+    return {path,definition};
+  }catch(error){
+    try{await restoreForeignQuarantine(paths,path);}catch{ /* Preserve the ownership refusal. */ }
+    if(isDecisionError(error)) throw refusal('Refusing to modify a changed LaunchAgent definition');
+    throw error;
+  }
+}
+
+async function publishDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,bytes:string,runner:CommandRunner,hooks:DaemonTestHooks|undefined,validate=true):Promise<Extract<Definition,{exists:true}>>{
+  await mkdir(dirname(paths.plistPath),{recursive:true,mode:0o700});
+  const directory=await privateDefinitionDirectory(paths,'candidate'),path=join(directory,'definition.plist');
+  const file=await open(path,'wx',0o600);
+  try{
+    await file.writeFile(bytes);
+    await file.chmod(0o600);
+  }finally{await file.close();}
+  const captured=await readDefinition(path,input);
+  if(!captured.exists||captured.bytes!==bytes) throw refusal('Refusing to publish a changed LaunchAgent definition');
+  const candidate=captured;
+  if(validate){
+    const validation=await runner([plutil,'-lint',path]);
+    if(validation.code!==0) throw publicError('validate');
+  }
+  await hooks?.beforeCandidateLink?.(paths,path);
+  await requireDefinition(path,input,candidate);
+  try{
+    await link(path,paths.plistPath);
+  }catch(error){
+    if(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='EEXIST'){
+      throw refusal('Refusing to publish over an existing LaunchAgent definition');
+    }
+    throw error;
+  }
+  return requireDefinition(paths.plistPath,input,candidate);
 }
 
 export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
@@ -277,6 +333,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
   const now=options.now??(()=>performance.now());
   const sleep=options.sleep??(milliseconds=>Bun.sleep(milliseconds));
   const isPidRunning=options.isPidRunning??defaultPidRunning;
+  const hooks=options.testHooks;
   const bootoutTimeoutMs=Number.isSafeInteger(options.bootoutTimeoutMs)&&options.bootoutTimeoutMs!>0
     ?Math.min(options.bootoutTimeoutMs!,maxBootoutTimeoutMs)
     :defaultBootoutTimeoutMs;
@@ -291,7 +348,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
   }
 
   async function status():Promise<DaemonStatus>{
-    const definition=await readDefinition(paths,input);
+    const definition=await readDefinition(paths.plistPath,input);
     const current=await inspect();
     return {enabled:definition.exists,loaded:current.loaded,running:current.running,...(current.pid===undefined?{}:{pid:current.pid}),...(current.lastExitStatus===undefined?{}:{lastExitStatus:current.lastExitStatus})};
   }
@@ -314,20 +371,36 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     }
   }
 
-  async function restore(previous:Definition,wasLoaded:boolean,newlyLoaded:boolean,published:Definition|undefined):Promise<void>{
+  async function bootstrapDefinition(definition:Extract<Definition,{exists:true}>):Promise<void>{
+    await hooks?.beforeBootstrap?.(paths);
+    await requireDefinition(paths.plistPath,input,definition);
+    const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
+    if(bootstrap.code!==0) throw publicError('enable');
+  }
+
+  async function restore(previous:Definition,wasLoaded:boolean,newlyLoaded:boolean,published:Extract<Definition,{exists:true}>|undefined,previousQuarantine:QuarantinedDefinition|undefined):Promise<void>{
     if(newlyLoaded){
       await bootoutAndWait(await inspect());
     }
     if(published){
-      if(previous.exists) await publishDefinition(paths,input,previous.bytes,runner,published,false);
-      else await removeDefinition(paths,input,published);
+      await quarantineDefinition(paths,input,published,'rollback',hooks);
+    }
+    let restored:Extract<Definition,{exists:true}>|undefined;
+    if(previousQuarantine){
+      await requireDefinition(previousQuarantine.path,input,previousQuarantine.definition);
+      try{
+        await link(previousQuarantine.path,paths.plistPath);
+      }catch(error){
+        if(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='EEXIST'){
+          throw refusal('Refusing to restore over an existing LaunchAgent definition');
+        }
+        throw error;
+      }
+      restored=await requireDefinition(paths.plistPath,input,previousQuarantine.definition);
     }else if(previous.exists){
-      await assertDefinitionUnchanged(paths,input,previous);
+      restored=await requireDefinition(paths.plistPath,input,previous);
     }
-    if(wasLoaded&&previous.exists){
-      const result=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
-      if(result.code!==0) throw publicError('restore');
-    }
+    if(wasLoaded&&restored) await bootstrapDefinition(restored);
   }
 
   async function safeLifecycle<T>(action:'enable'|'disable'|'restart'|'inspect',operation:()=>Promise<T>):Promise<T>{
@@ -341,7 +414,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     paths,
     status:()=>safeLifecycle('inspect',status),
     enable:()=>safeLifecycle('enable',async():Promise<DaemonStatus>=>{
-      const previous=await readDefinition(paths,input);
+      const previous=await readDefinition(paths.plistPath,input);
       const initial=await inspect();
       if(initial.loaded&&!previous.exists) throw refusal('Refusing to replace an unowned loaded LaunchAgent');
       const desired=renderLaunchAgent(input);
@@ -352,20 +425,22 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       if(initial.loaded){
         await bootoutAndWait(initial);
       }
-      let newlyLoaded=false,published:Definition|undefined;
+      let previousQuarantine:QuarantinedDefinition|undefined,newlyLoaded=false,published:Extract<Definition,{exists:true}>|undefined;
       try{
-        if(changed) published=await publishDefinition(paths,input,desired,runner,previous);
-        const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
-        if(bootstrap.code!==0) throw publicError('enable');
+        if(changed&&previous.exists) previousQuarantine=await quarantineDefinition(paths,input,previous,'replace',hooks);
+        if(changed) published=await publishDefinition(paths,input,desired,runner,hooks);
+        const bootstrapDefinitionSnapshot=published??(previous.exists?previous:undefined);
+        if(!bootstrapDefinitionSnapshot) throw refusal('Refusing to bootstrap a missing LaunchAgent definition');
+        await bootstrapDefinition(bootstrapDefinitionSnapshot);
         newlyLoaded=true;
         return await status();
       }catch(error){
-        try{await restore(previous,initial.loaded,newlyLoaded,published);}catch{ /* Preserve the primary public failure. */ }
+        try{await restore(previous,initial.loaded,newlyLoaded,published,previousQuarantine);}catch{ /* Preserve the primary public failure. */ }
         throw error;
       }
     }),
     disable:()=>safeLifecycle('disable',async():Promise<DaemonStatus>=>{
-      const previous=await readDefinition(paths,input);
+      const previous=await readDefinition(paths.plistPath,input);
       const current=await inspect();
       if(!previous.exists){
         if(current.loaded) throw refusal('Refusing to disable an unowned loaded LaunchAgent');
@@ -374,11 +449,11 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       if(current.loaded){
         await bootoutAndWait(current);
       }
-      await removeDefinition(paths,input,previous);
+      await quarantineDefinition(paths,input,previous,'disable',hooks);
       return {enabled:false,loaded:false,running:false};
     }),
     restart:()=>safeLifecycle('restart',async():Promise<DaemonStatus>=>{
-      const previous=await readDefinition(paths,input);
+      const previous=await readDefinition(paths.plistPath,input);
       const current=await inspect();
       if(!previous.exists||!current.loaded) throw refusal('Streamhub runtime is not enabled');
       rollRuntimeLog(paths);
