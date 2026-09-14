@@ -62,7 +62,7 @@ export async function runPreviewInstaller(options:PreviewInstallerOptions={}):Pr
     const selectedRoot=installedPackage?packageRoot:installedRoot,getuid=process.getuid;
     if(!getuid)throw new Error('Runtime daemon requires a user account');
     const plistPath=launchAgentPaths({home,uid:getuid(),bunPath:process.execPath,packageRoot:selectedRoot}).plistPath;
-    const beforeRemove=definitionPresent(plistPath)?async()=>{await daemonFor(selectedRoot).disable();}:undefined;
+    const beforeRemove=args.prefix!==undefined&&!definitionPresent(plistPath)?undefined:async()=>{await daemonFor(selectedRoot).disable();};
     const result=await uninstallPreview({packageRoot:selectedRoot,applicationRoot,binDirectory,...(beforeRemove?{beforeRemove}:{})});
     write(result.removed?`Streamhub ${packageVersion} removed`:`Streamhub ${packageVersion} is not installed`);
     write(`Data preserved: ${result.dataRoot}`);
