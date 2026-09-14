@@ -1,5 +1,7 @@
 import {closeSync,chmodSync,lstatSync,mkdirSync,openSync,readSync,renameSync,unlinkSync} from 'node:fs';
-import {chmod,lstat,link,mkdir,mkdtemp,open,readFile,rename} from 'node:fs/promises';
+import {lstat,link,mkdir,mkdtemp,open,readFile} from 'node:fs/promises';
+import {FFIType,dlopen,read} from 'bun:ffi';
+import {constants as osConstants} from 'node:os';
 import {dirname,join} from 'node:path';
 import {isManagedLaunchAgentPaths,launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,runtimeLabel,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
 
@@ -8,6 +10,7 @@ export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
 export type DaemonStatus={enabled:boolean;loaded:boolean;running:boolean;pid?:number;lastExitStatus?:number};
 export type DaemonTestHooks={
   beforeQuarantineMove?(context:'disable'|'replace'|'rollback',paths:LaunchAgentPaths):Promise<void>;
+  afterQuarantineDirectory?(context:'disable'|'replace'|'rollback',paths:LaunchAgentPaths,quarantinePath:string):Promise<void>;
   beforeCandidateLink?(paths:LaunchAgentPaths,candidatePath:string):Promise<void>;
   beforeBootstrap?(paths:LaunchAgentPaths):Promise<void>;
 };
@@ -34,6 +37,13 @@ const rolloverBytes=5*1024*1024;
 const bootoutPollMs=50;
 const defaultBootoutTimeoutMs=2_000;
 const maxBootoutTimeoutMs=5_000;
+const atFdcwd=-2;
+const renameExcl=0x00000004;
+
+const systemLibrary=dlopen('/usr/lib/libSystem.B.dylib',{
+  renameatx_np:{args:[FFIType.i32,FFIType.ptr,FFIType.i32,FFIType.ptr,FFIType.u32],returns:FFIType.i32},
+  __error:{args:[],returns:FFIType.ptr},
+});
 
 class PublicBoundaryError extends Error{
   constructor(message:string,readonly decision=false){super(message);}
@@ -57,6 +67,19 @@ function isDecisionError(error:unknown):error is PublicBoundaryError{
 
 function isMissing(error:unknown):boolean{
   return typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='ENOENT';
+}
+
+function exclusiveMove(source:string,destination:string):void{
+  const result=systemLibrary.symbols.renameatx_np(
+    atFdcwd,Buffer.from(`${source}\0`),atFdcwd,Buffer.from(`${destination}\0`),renameExcl,
+  );
+  if(result===0) return;
+  const error=new Error('Exclusive LaunchAgent move failed') as Error&{code?:string};
+  const errnoPointer=systemLibrary.symbols.__error();
+  const errno=errnoPointer===null?undefined:read.i32(errnoPointer);
+  if(errno===osConstants.errno.ENOENT) error.code='ENOENT';
+  if(errno===osConstants.errno.EEXIST) error.code='EEXIST';
+  throw error;
 }
 
 function unescapeXml(value:string):string{
@@ -261,9 +284,9 @@ async function requireDefinition(path:string,input:LaunchAgentInput,expected:Def
 async function privateDefinitionDirectory(paths:LaunchAgentPaths,kind:'candidate'|'quarantine'):Promise<string>{
   // Keep private entries: Node exposes no inode-conditional unlink, so cleanup
   // would recreate the same-UID check-then-delete race this protocol avoids.
-  const directory=await mkdtemp(join(dirname(paths.plistPath),`.${runtimeLabel}.${kind}-`));
-  await chmod(directory,0o700);
-  return directory;
+  // Darwin mkdtemp creates the unique directory with mode 0700, so there is no
+  // post-creation chmod window for another same-UID process to enter it.
+  return mkdtemp(join(dirname(paths.plistPath),`.${runtimeLabel}.${kind}-`));
 }
 
 async function restoreForeignQuarantine(paths:LaunchAgentPaths,quarantinePath:string):Promise<void>{
@@ -281,11 +304,14 @@ async function restoreForeignQuarantine(paths:LaunchAgentPaths,quarantinePath:st
 async function quarantineDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput,expected:Extract<Definition,{exists:true}>,context:'disable'|'replace'|'rollback',hooks:DaemonTestHooks|undefined):Promise<QuarantinedDefinition>{
   const directory=await privateDefinitionDirectory(paths,'quarantine');
   const path=join(directory,'definition.plist');
+  await hooks?.afterQuarantineDirectory?.(context,paths,path);
   await hooks?.beforeQuarantineMove?.(context,paths);
   try{
-    await rename(paths.plistPath,path);
+    exclusiveMove(paths.plistPath,path);
   }catch(error){
-    if(isMissing(error)) throw refusal('Refusing to modify a changed LaunchAgent definition');
+    if(isMissing(error)||(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='EEXIST')){
+      throw refusal('Refusing to modify a changed LaunchAgent definition');
+    }
     throw error;
   }
   try{

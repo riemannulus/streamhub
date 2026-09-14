@@ -101,6 +101,7 @@ test('enable validates, publishes, bootstraps, and leaves a live identical job u
     expect(await h.daemon.enable()).toEqual({enabled:true,loaded:true,running:true,pid:123,lastExitStatus:7});
     const temporary=h.recorded.commands[1]?.[2];
     expect(temporary).toMatch(new RegExp(`^${dirname(h.paths.plistPath).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\/\\.com\\.streamhub\\.runtime\\.candidate-.+\\/definition\\.plist$`));
+    expect((await stat(dirname(temporary!))).mode&0o777).toBe(0o700);
     expect(h.recorded.commands).toEqual([
       ['/bin/launchctl','print',h.paths.service],
       ['/usr/bin/plutil','-lint',temporary!],
@@ -229,6 +230,34 @@ test('disable quarantines a foreign replacement at the final mutation point',asy
   }finally{await h.cleanup();}
 });
 
+for(const destinationKind of ['regular','symlink'] as const){
+  test(`disable never clobbers a pre-populated ${destinationKind} quarantine destination`,async()=>{
+    const foreign=`foreign ${destinationKind} destination`;
+    let quarantinePath='',foreignTarget='';
+    const h=await daemonFixture({existing:'owned',loaded:true,running:true,testHooks:{afterQuarantineDirectory:async(context,_paths,path)=>{
+      expect(context).toBe('disable');
+      quarantinePath=path;
+      if(destinationKind==='regular') await writeFile(path,foreign);
+      else{
+        foreignTarget=`${path}.target`;
+        await writeFile(foreignTarget,foreign);
+        await symlink(foreignTarget,path);
+      }
+    }}});
+    try{
+      const owned=await readFile(h.paths.plistPath,'utf8');
+      await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
+      expect(await readFile(h.paths.plistPath,'utf8')).toBe(owned);
+      if(destinationKind==='regular') expect(await readFile(quarantinePath,'utf8')).toBe(foreign);
+      else{
+        expect((await lstat(quarantinePath)).isSymbolicLink()).toBe(true);
+        expect(await readFile(foreignTarget,'utf8')).toBe(foreign);
+      }
+      expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print']);
+    }finally{await h.cleanup();}
+  });
+}
+
 test('disable fails closed without bootout when a running service has no valid PID',async()=>{
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,reportedPid:0});
   try{
@@ -280,6 +309,37 @@ test('replacement quarantines a foreign replacement at the final mutation point'
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print']);
   }finally{await h.cleanup();}
 });
+
+for(const destinationKind of ['regular','symlink'] as const){
+  test(`changed enable never clobbers a pre-populated ${destinationKind} quarantine destination`,async()=>{
+    const foreign=`foreign ${destinationKind} destination`;
+    let quarantinePath='',foreignTarget='';
+    const h=await daemonFixture({existing:'owned',loaded:true,running:true,testHooks:{afterQuarantineDirectory:async(context,_paths,path)=>{
+      if(context!=='replace') return;
+      quarantinePath=path;
+      if(destinationKind==='regular') await writeFile(path,foreign);
+      else{
+        foreignTarget=`${path}.target`;
+        await writeFile(foreignTarget,foreign);
+        await symlink(foreignTarget,path);
+      }
+    }}});
+    const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+    try{
+      const owned=renderLaunchAgent(oldInput);
+      await writeFile(h.paths.plistPath,owned);
+      await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
+      expect(await readFile(h.paths.plistPath,'utf8')).toBe(owned);
+      if(destinationKind==='regular') expect(await readFile(quarantinePath,'utf8')).toBe(foreign);
+      else{
+        expect((await lstat(quarantinePath)).isSymbolicLink()).toBe(true);
+        expect(await readFile(foreignTarget,'utf8')).toBe(foreign);
+      }
+      expect(h.recorded.definition).toBe(owned);
+      expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','bootstrap']);
+    }finally{await h.cleanup();}
+  });
+}
 
 test('changed enable retains a linked plist in quarantine after bootout',async()=>{
   let target='';
@@ -394,6 +454,37 @@ test('rollback quarantines a foreign replacement at its final mutation point',as
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap']);
   }finally{await h.cleanup();}
 });
+
+for(const destinationKind of ['regular','symlink'] as const){
+  test(`rollback never clobbers a pre-populated ${destinationKind} quarantine destination`,async()=>{
+    const foreign=`foreign ${destinationKind} destination`;
+    let quarantinePath='',foreignTarget='';
+    const h=await daemonFixture({loaded:true,running:true,failBootstrap:1,testHooks:{afterQuarantineDirectory:async(context,_paths,path)=>{
+      if(context!=='rollback') return;
+      quarantinePath=path;
+      if(destinationKind==='regular') await writeFile(path,foreign);
+      else{
+        foreignTarget=`${path}.target`;
+        await writeFile(foreignTarget,foreign);
+        await symlink(foreignTarget,path);
+      }
+    }}});
+    const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+    try{
+      await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+      const desired=renderLaunchAgent(h.input);
+      await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+      expect(await readFile(h.paths.plistPath,'utf8')).toBe(desired);
+      if(destinationKind==='regular') expect(await readFile(quarantinePath,'utf8')).toBe(foreign);
+      else{
+        expect((await lstat(quarantinePath)).isSymbolicLink()).toBe(true);
+        expect(await readFile(foreignTarget,'utf8')).toBe(foreign);
+      }
+      expect(h.recorded.definition).toBeUndefined();
+      expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap']);
+    }finally{await h.cleanup();}
+  });
+}
 
 test('failed post-bootstrap status verification restores prior bytes and loaded state',async()=>{
   const h=await daemonFixture({loaded:true,running:true,failPrintOn:3});
