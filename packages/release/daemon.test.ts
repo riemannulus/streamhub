@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {lstat,mkdtemp,mkdir,readFile,readdir,rename,rm,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {lstat,mkdtemp,mkdir,readFile,readlink,readdir,rename,rm,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createRuntimeDaemon,prepareRuntimeLog,readRuntimeLog,type CommandResult,type DaemonTestHooks} from './daemon';
@@ -203,7 +203,7 @@ test('disable preserves a same-content plist replacement after bootout',async()=
   }finally{await h.cleanup();}
 });
 
-test('disable retains a linked plist in quarantine after bootout',async()=>{
+test('disable restores a linked foreign plist to the absent public path after bootout',async()=>{
   let target='';
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
     target=`${paths.plistPath}.foreign`;
@@ -213,9 +213,12 @@ test('disable retains a linked plist in quarantine after bootout',async()=>{
   }});
   try{
     await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
-    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(h.paths.plistPath)).toBe(target);
     expect(await readFile(target,'utf8')).toBe('foreign definition');
-    expect((await readdir(dirname(h.paths.plistPath))).some(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'))).toBe(true);
+    const quarantine=(await readdir(dirname(h.paths.plistPath))).find(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'));
+    expect(quarantine).toBeDefined();
+    expect(await readdir(join(dirname(h.paths.plistPath),quarantine!))).toEqual([]);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
   }finally{await h.cleanup();}
 });
@@ -341,7 +344,7 @@ for(const destinationKind of ['regular','symlink'] as const){
   });
 }
 
-test('changed enable retains a linked plist in quarantine after bootout',async()=>{
+test('changed enable restores a linked foreign plist to the absent public path after bootout',async()=>{
   let target='';
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,duringBootoutWait:async paths=>{
     target=`${paths.plistPath}.foreign`;
@@ -353,9 +356,12 @@ test('changed enable retains a linked plist in quarantine after bootout',async()
   try{
     await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
     await expect(h.daemon.enable()).rejects.toThrow('changed LaunchAgent definition');
-    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(h.paths.plistPath)).toBe(target);
     expect(await readFile(target,'utf8')).toBe('foreign definition');
-    expect((await readdir(dirname(h.paths.plistPath))).some(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'))).toBe(true);
+    const quarantine=(await readdir(dirname(h.paths.plistPath))).find(entry=>entry.startsWith('.com.streamhub.runtime.quarantine-'));
+    expect(quarantine).toBeDefined();
+    expect(await readdir(join(dirname(h.paths.plistPath),quarantine!))).toEqual([]);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print']);
   }finally{await h.cleanup();}
 });
@@ -452,6 +458,58 @@ test('rollback quarantines a foreign replacement at its final mutation point',as
     await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(foreign);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap']);
+  }finally{await h.cleanup();}
+});
+
+test('rollback restores a linked foreign replacement to the absent public path',async()=>{
+  let target='',rollbackQuarantine='';
+  const h=await daemonFixture({loaded:true,running:true,failBootstrap:1,testHooks:{
+    afterQuarantineDirectory:async(context,_paths,path)=>{if(context==='rollback') rollbackQuarantine=path;},
+    beforeQuarantineMove:async(context,paths)=>{
+      if(context!=='rollback') return;
+      target=`${paths.plistPath}.foreign`;
+      await writeFile(target,'foreign definition');
+      await unlink(paths.plistPath);
+      await symlink(target,paths.plistPath);
+    },
+  }});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+    await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+    expect((await lstat(h.paths.plistPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(h.paths.plistPath)).toBe(target);
+    expect(await readFile(target,'utf8')).toBe('foreign definition');
+    await expect(lstat(rollbackQuarantine)).rejects.toThrow();
+    expect(await readdir(dirname(rollbackQuarantine))).toEqual([]);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap']);
+  }finally{await h.cleanup();}
+});
+
+test('quarantine recovery preserves a newer public entry and its linked foreign entry',async()=>{
+  const newer='newer public definition';
+  let target='',quarantinePath='';
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,testHooks:{
+    afterQuarantineDirectory:async(context,_paths,path)=>{if(context==='disable') quarantinePath=path;},
+    beforeQuarantineMove:async(context,paths)=>{
+      if(context!=='disable') return;
+      target=`${paths.plistPath}.foreign`;
+      await writeFile(target,'foreign definition');
+      await unlink(paths.plistPath);
+      await symlink(target,paths.plistPath);
+    },
+    beforeQuarantineRestore:async(paths,path)=>{
+      expect(path).toBe(quarantinePath);
+      await writeFile(paths.plistPath,newer);
+    },
+  }});
+  try{
+    await expect(h.daemon.disable()).rejects.toThrow('changed LaunchAgent definition');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(newer);
+    expect((await lstat(quarantinePath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(quarantinePath)).toBe(target);
+    expect(await readFile(target,'utf8')).toBe('foreign definition');
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print']);
   }finally{await h.cleanup();}
 });
 

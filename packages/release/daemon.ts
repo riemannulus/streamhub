@@ -11,6 +11,7 @@ export type DaemonStatus={enabled:boolean;loaded:boolean;running:boolean;pid?:nu
 export type DaemonTestHooks={
   beforeQuarantineMove?(context:'disable'|'replace'|'rollback',paths:LaunchAgentPaths):Promise<void>;
   afterQuarantineDirectory?(context:'disable'|'replace'|'rollback',paths:LaunchAgentPaths,quarantinePath:string):Promise<void>;
+  beforeQuarantineRestore?(paths:LaunchAgentPaths,quarantinePath:string):Promise<void>;
   beforeCandidateLink?(paths:LaunchAgentPaths,candidatePath:string):Promise<void>;
   beforeBootstrap?(paths:LaunchAgentPaths):Promise<void>;
 };
@@ -289,12 +290,12 @@ async function privateDefinitionDirectory(paths:LaunchAgentPaths,kind:'candidate
   return mkdtemp(join(dirname(paths.plistPath),`.${runtimeLabel}.${kind}-`));
 }
 
-async function restoreForeignQuarantine(paths:LaunchAgentPaths,quarantinePath:string):Promise<void>{
+async function restoreForeignQuarantine(paths:LaunchAgentPaths,quarantinePath:string,hooks:DaemonTestHooks|undefined):Promise<void>{
   try{
-    const info=await lstat(quarantinePath);
-    if(!info.isFile()) return;
-    // link creates only when the public name remains absent; it never clobbers.
-    await link(quarantinePath,paths.plistPath);
+    await hooks?.beforeQuarantineRestore?.(paths,quarantinePath);
+    // This moves every foreign entry type back only while the public name stays
+    // absent. RENAME_EXCL preserves both entries when a newer public name wins.
+    exclusiveMove(quarantinePath,paths.plistPath);
   }catch(error){
     if(isMissing(error)||(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='EEXIST')) return;
     throw error;
@@ -318,7 +319,7 @@ async function quarantineDefinition(paths:LaunchAgentPaths,input:LaunchAgentInpu
     const definition=await requireDefinition(path,input,expected);
     return {path,definition};
   }catch(error){
-    try{await restoreForeignQuarantine(paths,path);}catch{ /* Preserve the ownership refusal. */ }
+    try{await restoreForeignQuarantine(paths,path,hooks);}catch{ /* Preserve the ownership refusal. */ }
     if(isDecisionError(error)) throw refusal('Refusing to modify a changed LaunchAgent definition');
     throw error;
   }
