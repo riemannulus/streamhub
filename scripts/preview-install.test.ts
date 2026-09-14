@@ -28,15 +28,15 @@ test('the direct uninstall wrapper maps the normal install layout to the default
   }finally{rmSync(root,{recursive:true,force:true});}
 });
 
-test('the direct uninstall wrapper keeps the explicit custom-prefix command path',async()=>{
-  const root=mkdtempSync(join(tmpdir(),'streamhub-uninstall-wrapper-')),prefix=join(root,'custom prefix'),packageRoot=join(prefix,'Application Support','Streamhub','app',packageVersion),wrapper=join(packageRoot,'uninstall.sh'),fakeBin=join(root,'fake-bin'),capture=join(root,'capture');
+test('the direct uninstall wrapper maps an installed custom layout to its command path without arguments',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-uninstall-wrapper-')),home=join(root,'home'),prefix=join(root,'custom prefix'),packageRoot=join(prefix,'Application Support','Streamhub','app',packageVersion),wrapper=join(packageRoot,'uninstall.sh'),fakeBin=join(root,'fake-bin'),capture=join(root,'capture');
   try{
     packageFixture(packageRoot);copyFileSync(resolve('packaging/uninstall.sh'),wrapper);chmodSync(wrapper,0o700);mkdirSync(fakeBin);
-    writeFileSync(join(fakeBin,'bun'),'#!/bin/sh\nprintf "%s\\n" "$STREAMHUB_PACKAGE_ROOT" "$STREAMHUB_COMMAND_PATH" "$1" "$2" "$3" "$4" > "$STREAMHUB_CAPTURE"\n',{mode:0o700});
-    const child=Bun.spawn([wrapper,'--prefix',prefix],{env:{...process.env,PATH:`${fakeBin}:${process.env.PATH}`,STREAMHUB_CAPTURE:capture},stdout:'pipe',stderr:'pipe'});
+    writeFileSync(join(fakeBin,'bun'),'#!/bin/sh\nprintf "%s\\n" "$STREAMHUB_PACKAGE_ROOT" "$STREAMHUB_COMMAND_PATH" "$1" "$2" > "$STREAMHUB_CAPTURE"\n',{mode:0o700});
+    const child=Bun.spawn([wrapper],{env:{...process.env,HOME:home,PATH:`${fakeBin}:${process.env.PATH}`,STREAMHUB_CAPTURE:capture},stdout:'pipe',stderr:'pipe'});
     expect(await child.exited).toBe(0);
-    const [capturedPackage,capturedCommand,entry,operation,option,capturedPrefix]=readFileSync(capture,'utf8').trim().split('\n');
-    expect([capturedPackage,capturedCommand,entry,operation,option,capturedPrefix]).toEqual([packageRoot,join(prefix,'bin','streamhub'),join(packageRoot,'app','install.js'),'uninstall','--prefix',prefix]);
+    const [capturedPackage,capturedCommand,entry,operation]=readFileSync(capture,'utf8').trim().split('\n');
+    expect([capturedPackage,capturedCommand,entry,operation]).toEqual([packageRoot,join(prefix,'bin','streamhub'),join(packageRoot,'app','install.js'),'uninstall']);
     const locations=resolveInstallerPaths({arguments:{operation:'uninstall'},packageRoot:capturedPackage!,home:join(root,'home'),commandPath:capturedCommand,installedPackage:true});
     expect(locations).toEqual({applicationRoot:join(prefix,'Application Support','Streamhub'),binDirectory:join(prefix,'bin')});
     expect(join(locations.applicationRoot,'data')).toBe(join(prefix,'Application Support','Streamhub','data'));
@@ -45,6 +45,18 @@ test('the direct uninstall wrapper keeps the explicit custom-prefix command path
     await runPreviewInstaller({argv:['uninstall'],packageRoot:capturedPackage,home:join(root,'home'),commandPath:capturedCommand,daemonFor:targetRoot=>createRuntimeDaemon({home:join(root,'home'),uid:501,bunPath:'/bin/bun',packageRoot:targetRoot,runner}),write:value=>output.push(value)});
     expect(existsSync(packageRoot)).toBe(false);expect(existsSync(capturedCommand!)).toBe(false);expect(output.at(-1)).toBe(`Data preserved: ${join(prefix,'Application Support','Streamhub','data')}`);
     expect(commands).toEqual([['/bin/launchctl','print','gui/501/com.streamhub.runtime']]);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('the extracted uninstall wrapper uses its explicit prefix command path',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-uninstall-wrapper-')),home=join(root,'home'),prefix=join(root,'custom prefix'),packageRoot=join(root,'extracted preview'),wrapper=join(packageRoot,'uninstall.sh'),fakeBin=join(root,'fake-bin'),capture=join(root,'capture');
+  try{
+    packageFixture(packageRoot);copyFileSync(resolve('packaging/uninstall.sh'),wrapper);chmodSync(wrapper,0o700);mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin,'bun'),'#!/bin/sh\nprintf "%s\\n" "$STREAMHUB_PACKAGE_ROOT" "$STREAMHUB_COMMAND_PATH" "$1" "$2" "$3" "$4" > "$STREAMHUB_CAPTURE"\n',{mode:0o700});
+    const child=Bun.spawn([wrapper,'--prefix',prefix],{env:{...process.env,HOME:home,PATH:`${fakeBin}:${process.env.PATH}`,STREAMHUB_CAPTURE:capture},stdout:'pipe',stderr:'pipe'});
+    expect(await child.exited).toBe(0);
+    const [capturedPackage,capturedCommand,entry,operation,option,capturedPrefix]=readFileSync(capture,'utf8').trim().split('\n');
+    expect([capturedPackage,capturedCommand,entry,operation,option,capturedPrefix]).toEqual([packageRoot,join(prefix,'bin','streamhub'),join(packageRoot,'app','install.js'),'uninstall','--prefix',prefix]);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
 
