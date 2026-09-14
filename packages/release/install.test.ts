@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
+import {chmodSync,existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createReleaseManifest} from './manifest';
@@ -82,6 +82,18 @@ test('a fresh install does not invoke a supplied service lifecycle',async()=>{
   expect(events).toEqual([]);
 });
 
+test('a fresh install inspects a supplied exact service definition before publishing',async()=>{
+  const h=await fixture(),events:string[]=[];
+  await expect(installPreview({...h.options,service:{
+    inspect:async()=>{events.push('inspect');throw new Error('foreign plist');},
+    prepare:async()=>{events.push('prepare');return undefined;},
+    activate:async()=>{events.push('activate');},
+    rollback:async()=>{events.push('rollback');},
+  }})).rejects.toThrow('foreign plist');
+  expect(events).toEqual(['inspect']);
+  expect(existsSync(join(h.applicationRoot,'app','0.1.0-preview.1'))).toBe(false);
+});
+
 test('a foreign service refusal happens before payload mutation',async()=>{
   const h=await fixture({installedCommit:'a'.repeat(40),packageCommit:'b'.repeat(40)}),installRoot=join(h.applicationRoot,'app','0.1.0-preview.1');
   await expect(installPreview({...h.options,service:{
@@ -110,6 +122,22 @@ test('a repeated same-commit install does not restart the service',async()=>{
     rollback:async()=>{events.push('rollback');},
   }});
   expect(events).toEqual([]);
+});
+
+test('recovery keeps the activation failure primary and still rolls back after a filesystem recovery failure',async()=>{
+  const h=await fixture({installedCommit:'a'.repeat(40),packageCommit:'b'.repeat(40)}),events:string[]=[],appRoot=join(h.applicationRoot,'app');
+  let failure:Error|undefined;
+  try{
+    try{await installPreview({...h.options,service:{
+      prepare:async()=>({wasEnabled:true}),
+      activate:async()=>{chmodSync(appRoot,0o500);throw new Error('activation failed');},
+      rollback:async()=>{events.push('rollback');},
+    }});}catch(error){failure=error as Error;}
+  }finally{chmodSync(appRoot,0o700);}
+  expect(failure?.message).toContain('activation failed');
+  expect(failure?.message).toContain('EACCES');
+  expect(failure?.message).not.toContain(h.applicationRoot);
+  expect(events).toEqual(['rollback']);
 });
 
 test('installer arguments allow one absolute smoke prefix only',()=>{

@@ -8,6 +8,7 @@ const markerName='.streamhub-preview-install.json';
 const payloadEntries=['README.md','DEVELOPMENT.md','manifest.json','SHA256SUMS','install.sh','uninstall.sh','bin','app','share'] as const;
 export type InstallResult={installRoot:string;commandPath:string;dataRoot:string};
 export type InstallServiceHooks<State>={
+  inspect?(context:{currentRoot?:string;targetRoot:string}):Promise<void>;
   prepare(context:{currentRoot?:string;targetRoot:string}):Promise<State>;
   activate(state:State,result:InstallResult):Promise<void>;
   rollback(state:State,context:{restoredRoot?:string}):Promise<void>;
@@ -77,10 +78,20 @@ function restoreCommand(commandPath:string,target:string,wasPresent:boolean){
   if(wasPresent)symlinkSync(target,commandPath);
 }
 
-function withRollbackContext(error:unknown,rollbackError:unknown):Error{
+type RecoveryFailure={step:string;error:unknown};
+
+function recoveryDetail(error:unknown):string{
+  if(typeof error==='object'&&error!==null&&'code' in error&&typeof (error as {code?:unknown}).code==='string'){
+    const code=(error as {code:string}).code;
+    if(/^[A-Z][A-Z0-9_]{0,31}$/.test(code))return code;
+  }
+  return error instanceof Error&&error.name==='Error'?'Error':'unknown error';
+}
+
+function withRollbackContext(error:unknown,failures:RecoveryFailure[]):Error{
   const primary=error instanceof Error?error:new Error('Preview install failed',{cause:error});
-  const detail=(rollbackError instanceof Error?rollbackError.message:String(rollbackError)).replace(/\s+/g,' ').slice(0,200);
-  primary.message=`${primary.message} (service rollback failed: ${detail||'unknown error'})`;
+  const detail=failures.map(failure=>`${failure.step}: ${recoveryDetail(failure.error)}`).join('; ').slice(0,200);
+  primary.message=`${primary.message} (recovery incomplete: ${detail||'unknown error'})`;
   return primary;
 }
 
@@ -89,6 +100,7 @@ export async function installPreview<State=never>(options:InstallOptions<State>)
   if(samePath(packageRoot,locations.installRoot))throw new Error('Package source cannot be the install destination');
   const existing=assertOwnedDirectory(locations.installRoot,manifest.version);
   assertCommandAvailable(locations.commandPath,target);
+  await options.service?.inspect?.({currentRoot:existing?locations.installRoot:undefined,targetRoot:locations.installRoot});
   const result={installRoot:locations.installRoot,commandPath:locations.commandPath,dataRoot:locations.dataRoot};
   if(existing?.gitCommit===manifest.gitCommit){
     mkdirSync(locations.binDirectory,{recursive:true});
@@ -120,14 +132,18 @@ export async function installPreview<State=never>(options:InstallOptions<State>)
     if(existing)rmSync(backup,{recursive:true});
     return result;
   }catch(error){
-    if(stat(staging))rmSync(staging,{recursive:true});
-    if(published&&isNewPayload(locations.installRoot,{name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit}))rmSync(locations.installRoot,{recursive:true});
-    if(stat(backup))renameSync(backup,locations.installRoot);
-    if(commandTouched)restoreCommand(locations.commandPath,target,commandWasPresent);
+    const failures:RecoveryFailure[]=[];
+    const recover=(step:string,operation:()=>void)=>{try{operation();}catch(recoveryError){failures.push({step,error:recoveryError});}};
+    recover('staging cleanup',()=>{if(stat(staging))rmSync(staging,{recursive:true});});
+    recover('new payload removal',()=>{if(published&&isNewPayload(locations.installRoot,{name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit}))rmSync(locations.installRoot,{recursive:true});});
+    recover('payload restoration',()=>{if(stat(backup))renameSync(backup,locations.installRoot);});
+    recover('command restoration',()=>{if(commandTouched)restoreCommand(locations.commandPath,target,commandWasPresent);});
+    const restoredRoot=existing&&isNewPayload(locations.installRoot,existing)?locations.installRoot:undefined;
     if(servicePrepared){
-      try{await options.service!.rollback(serviceState as State,{restoredRoot:existing?locations.installRoot:undefined});}
-      catch(rollbackError){throw withRollbackContext(error,rollbackError);}
+      try{await options.service!.rollback(serviceState as State,{restoredRoot});}
+      catch(rollbackError){failures.push({step:'service rollback',error:rollbackError});}
     }
+    if(failures.length)throw withRollbackContext(error,failures);
     throw error;
   }
 }
