@@ -280,8 +280,12 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     return {enabled:definition.exists,loaded:current.loaded,running:current.running,...(current.pid===undefined?{}:{pid:current.pid}),...(current.lastExitStatus===undefined?{}:{lastExitStatus:current.lastExitStatus})};
   }
 
-  async function bootoutAndWait(current:ReturnType<typeof parseLaunchctlPrint>):Promise<void>{
+  function assertObservableRuntimeExit(current:ReturnType<typeof parseLaunchctlPrint>):void{
     if(current.running&&current.pid===undefined) throw publicError('verify runtime exit');
+  }
+
+  async function bootoutAndWait(current:ReturnType<typeof parseLaunchctlPrint>):Promise<void>{
+    assertObservableRuntimeExit(current);
     const bootout=await runner([launchctl,'bootout',paths.service]);
     if(bootout.code!==0) throw publicError('disable');
     const deadline=now()+bootoutTimeoutMs;
@@ -325,6 +329,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       const desired=renderLaunchAgent(input);
       const changed=previous.bytes!==desired;
       if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
+      if(initial.loaded) assertObservableRuntimeExit(initial);
       rollRuntimeLog(paths);
       if(initial.loaded){
         await bootoutAndWait(initial);

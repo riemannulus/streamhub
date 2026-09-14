@@ -183,8 +183,14 @@ test('replacement enable fails closed without bootout when a running service has
   const previous=renderLaunchAgent(oldInput);
   try{
     await writeFile(h.paths.plistPath,previous);
+    await mkdir(dirname(h.paths.logPath),{recursive:true});
+    const currentLog='x'.repeat(5*1024*1024+1),previousLog='previous managed log';
+    await writeFile(h.paths.logPath,currentLog);
+    await writeFile(h.paths.previousLogPath,previousLog);
     await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
+    expect(await readFile(h.paths.logPath,'utf8')).toBe(currentLog);
+    expect(await readFile(h.paths.previousLogPath,'utf8')).toBe(previousLog);
     expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
   }finally{await h.cleanup();}
 });
