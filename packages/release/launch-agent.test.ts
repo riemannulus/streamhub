@@ -57,6 +57,7 @@ test('ownership validation rejects malformed XML',()=>{
   const xml=renderLaunchAgent(input).replace('</plist>','');
   expect(()=>validateOwnedLaunchAgent(xml,input)).toThrow('plist');
   expect(()=>validateOwnedLaunchAgent(renderLaunchAgent(input).replace('version="1.0"','version="not-a-version"'),input)).toThrow('plist');
+  expect(()=>validateOwnedLaunchAgent(renderLaunchAgent(input).replace('<false/>','<false/ >'),input)).toThrow('plist');
 });
 
 test('ownership validation requires KeepAlive.SuccessfulExit to be false',()=>{

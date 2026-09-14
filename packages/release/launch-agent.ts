@@ -166,9 +166,9 @@ class PlistParser{
     const match=this.xml.slice(this.index).match(/^<([A-Za-z_][A-Za-z0-9_.:-]*)([^<>]*)>/);
     if(!match) throw new Error('invalid element');
     this.index+=match[0].length;
-    const rawAttributes=match[2].trim();
+    const rawAttributes=match[2]!;
     const selfClosing=rawAttributes.endsWith('/');
-    const attributes=selfClosing?rawAttributes.slice(0,-1).trim():rawAttributes;
+    const attributes=(selfClosing?rawAttributes.slice(0,-1):rawAttributes).trim();
     const element:XmlElement={kind:'element',name:match[1]!,attributes,children:[]};
     if(selfClosing) return element;
 
