@@ -3,6 +3,7 @@ import {homedir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createRuntimeDaemon,type RuntimeDaemon} from '../packages/release/daemon';
 import {installPreview,parseInstallerArguments,resolveInstallerPaths,uninstallPreview} from '../packages/release/install';
+import {launchAgentPaths} from '../packages/release/launch-agent';
 import {packageVersion} from '../packages/release/version';
 
 export type PreviewInstallerOptions={
@@ -58,8 +59,11 @@ export async function runPreviewInstaller(options:PreviewInstallerOptions={}):Pr
     write(`Command: ${result.commandPath}`);
     write(`Data: ${result.dataRoot} (preserved on uninstall)`);
   }else{
-    const selectedRoot=installedPackage?packageRoot:installedRoot,daemon=daemonFor(selectedRoot);
-    const result=await uninstallPreview({packageRoot:selectedRoot,applicationRoot,binDirectory,beforeRemove:async()=>{await daemon.disable();}});
+    const selectedRoot=installedPackage?packageRoot:installedRoot,getuid=process.getuid;
+    if(!getuid)throw new Error('Runtime daemon requires a user account');
+    const plistPath=launchAgentPaths({home,uid:getuid(),bunPath:process.execPath,packageRoot:selectedRoot}).plistPath;
+    const beforeRemove=definitionPresent(plistPath)?async()=>{await daemonFor(selectedRoot).disable();}:undefined;
+    const result=await uninstallPreview({packageRoot:selectedRoot,applicationRoot,binDirectory,...(beforeRemove?{beforeRemove}:{})});
     write(result.removed?`Streamhub ${packageVersion} removed`:`Streamhub ${packageVersion} is not installed`);
     write(`Data preserved: ${result.dataRoot}`);
   }

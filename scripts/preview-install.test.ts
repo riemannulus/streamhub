@@ -30,7 +30,16 @@ test('the installed uninstall wrapper exports its exact custom command path',asy
     const commands:string[][]=[],output:string[]=[],runner=async(argv:readonly string[]):Promise<CommandResult>=>{commands.push([...argv]);return{code:113,stdout:'',stderr:'Could not find service'};};
     await runPreviewInstaller({argv:['uninstall'],packageRoot:capturedPackage,home:join(root,'home'),commandPath:capturedCommand,daemonFor:targetRoot=>createRuntimeDaemon({home:join(root,'home'),uid:501,bunPath:'/bin/bun',packageRoot:targetRoot,runner}),write:value=>output.push(value)});
     expect(existsSync(packageRoot)).toBe(false);expect(existsSync(capturedCommand!)).toBe(false);expect(output.at(-1)).toBe(`Data preserved: ${join(prefix,'Application Support','Streamhub','data')}`);
-    expect(commands).toEqual([['/bin/launchctl','print','gui/501/com.streamhub.runtime']]);
+    expect(commands).toEqual([]);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('uninstalling a plist-absent custom-prefix package preserves data without constructing a daemon',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-prefix-uninstall-')),prefix=join(root,'custom prefix'),packageRoot=join(prefix,'Application Support','Streamhub','app',packageVersion),commandPath=join(prefix,'bin','streamhub'),dataRoot=join(prefix,'Application Support','Streamhub','data');
+  try{
+    packageFixture(packageRoot);writeFileSync(join(packageRoot,'.streamhub-preview-install.json'),JSON.stringify({name:'streamhub-preview',version:packageVersion,gitCommit:'a'.repeat(40)}));mkdirSync(dirname(commandPath),{recursive:true});symlinkSync(join(packageRoot,'bin','streamhub'),commandPath);mkdirSync(dataRoot,{recursive:true});writeFileSync(join(dataRoot,'sentinel'),'keep');
+    await runPreviewInstaller({argv:['uninstall'],packageRoot,home:join(root,'home'),commandPath,daemonFor:()=>{throw new Error('daemon construction must not occur');},write:()=>{}});
+    expect(existsSync(packageRoot)).toBe(false);expect(existsSync(commandPath)).toBe(false);expect(readFileSync(join(dataRoot,'sentinel'),'utf8')).toBe('keep');
   }finally{rmSync(root,{recursive:true,force:true});}
 });
 
