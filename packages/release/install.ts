@@ -6,8 +6,15 @@ import {packageVersion} from './version';
 
 const markerName='.streamhub-preview-install.json';
 const payloadEntries=['README.md','DEVELOPMENT.md','manifest.json','SHA256SUMS','install.sh','uninstall.sh','bin','app','share'] as const;
-type InstallOptions={packageRoot:string;applicationRoot:string;binDirectory:string};
-type InstallResult={installRoot:string;commandPath:string;dataRoot:string};
+export type InstallResult={installRoot:string;commandPath:string;dataRoot:string};
+export type InstallServiceHooks<State>={
+  prepare(context:{currentRoot?:string;targetRoot:string}):Promise<State>;
+  activate(state:State,result:InstallResult):Promise<void>;
+  rollback(state:State,context:{restoredRoot?:string}):Promise<void>;
+};
+export type InstallOptions<State=never>={packageRoot:string;applicationRoot:string;binDirectory:string;service?:InstallServiceHooks<State>};
+export type UninstallOptions={packageRoot:string;applicationRoot:string;binDirectory:string;beforeRemove?:()=>Promise<void>};
+type InstallLocations={packageRoot:string;applicationRoot:string;binDirectory:string};
 type InstallMarker={name:'streamhub-preview';version:string;gitCommit:string};
 export type InstallerArguments={operation:'install'|'uninstall';prefix?:string};
 type InstallerPathInput={arguments:InstallerArguments;packageRoot:string;home:string;commandPath?:string;installedPackage:boolean};
@@ -33,7 +40,7 @@ export function resolveInstallerPaths(input:InstallerPathInput):{applicationRoot
   return{applicationRoot:join(input.home,'Library','Application Support','Streamhub'),binDirectory:join(input.home,'.local','bin')};
 }
 
-function assertLocations(options:InstallOptions,version:string){
+function assertLocations(options:InstallLocations,version:string){
   const applicationRoot=resolve(options.applicationRoot),binDirectory=resolve(options.binDirectory);
   if(!isAbsolute(options.applicationRoot)||applicationRoot===sep||basename(applicationRoot)!=='Streamhub'||dirname(applicationRoot)===sep)throw new Error('Refusing unsafe install root');
   if(!isAbsolute(options.binDirectory)||binDirectory===sep)throw new Error('Refusing unsafe command directory');
@@ -60,7 +67,24 @@ function assertCommandAvailable(commandPath:string,target:string){
   if(!samePath(actual,target))throw new Error('Refusing to replace a foreign command');
 }
 
-export async function installPreview(options:InstallOptions):Promise<InstallResult>{
+function isNewPayload(installRoot:string,manifest:InstallMarker):boolean{
+  const marker=readMarker(installRoot);
+  return marker?.version===manifest.version&&marker.gitCommit===manifest.gitCommit;
+}
+
+function restoreCommand(commandPath:string,target:string,wasPresent:boolean){
+  if(stat(commandPath))unlinkSync(commandPath);
+  if(wasPresent)symlinkSync(target,commandPath);
+}
+
+function withRollbackContext(error:unknown,rollbackError:unknown):Error{
+  const primary=error instanceof Error?error:new Error('Preview install failed',{cause:error});
+  const detail=(rollbackError instanceof Error?rollbackError.message:String(rollbackError)).replace(/\s+/g,' ').slice(0,200);
+  primary.message=`${primary.message} (service rollback failed: ${detail||'unknown error'})`;
+  return primary;
+}
+
+export async function installPreview<State=never>(options:InstallOptions<State>):Promise<InstallResult>{
   const packageRoot=realpathSync(options.packageRoot),manifest=readManifest(packageRoot),locations=assertLocations(options,manifest.version),target=join(locations.installRoot,'bin','streamhub');
   if(samePath(packageRoot,locations.installRoot))throw new Error('Package source cannot be the install destination');
   const existing=assertOwnedDirectory(locations.installRoot,manifest.version);
@@ -72,30 +96,43 @@ export async function installPreview(options:InstallOptions):Promise<InstallResu
     return result;
   }
   for(const entry of payloadEntries)if(!existsSync(join(packageRoot,entry)))throw new Error(`Incomplete preview package: missing ${entry}`);
-  mkdirSync(join(locations.applicationRoot,'app'),{recursive:true});
   const staging=join(locations.applicationRoot,'app',`.${manifest.version}.${randomUUID()}.tmp`),backup=join(locations.applicationRoot,'app',`.${manifest.version}.${randomUUID()}.backup`);
-  let published=false;
+  const commandWasPresent=Boolean(stat(locations.commandPath));
+  let published=false,commandTouched=false,servicePrepared=false;
+  let serviceState:State|undefined;
   try{
+    if(existing&&options.service){
+      serviceState=await options.service.prepare({currentRoot:locations.installRoot,targetRoot:locations.installRoot});
+      servicePrepared=true;
+    }
+    mkdirSync(join(locations.applicationRoot,'app'),{recursive:true});
     mkdirSync(staging);
     for(const entry of payloadEntries)cpSync(join(packageRoot,entry),join(staging,entry),{recursive:true,preserveTimestamps:true});
     writeFileSync(join(staging,markerName),JSON.stringify({name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit},null,2)+'\n',{mode:0o600});
     if(existing)renameSync(locations.installRoot,backup);
     renameSync(staging,locations.installRoot);
     published=true;
+    if(servicePrepared)await options.service!.activate(serviceState as State,result);
     mkdirSync(locations.binDirectory,{recursive:true});
+    commandTouched=true;
     if(stat(locations.commandPath))unlinkSync(locations.commandPath);
     symlinkSync(target,locations.commandPath);
     if(existing)rmSync(backup,{recursive:true});
     return result;
   }catch(error){
     if(stat(staging))rmSync(staging,{recursive:true});
-    if(published&&stat(locations.installRoot))rmSync(locations.installRoot,{recursive:true});
+    if(published&&isNewPayload(locations.installRoot,{name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit}))rmSync(locations.installRoot,{recursive:true});
     if(stat(backup))renameSync(backup,locations.installRoot);
+    if(commandTouched)restoreCommand(locations.commandPath,target,commandWasPresent);
+    if(servicePrepared){
+      try{await options.service!.rollback(serviceState as State,{restoredRoot:existing?locations.installRoot:undefined});}
+      catch(rollbackError){throw withRollbackContext(error,rollbackError);}
+    }
     throw error;
   }
 }
 
-export async function uninstallPreview(options:InstallOptions):Promise<{removed:boolean;dataRoot:string}>{
+export async function uninstallPreview(options:UninstallOptions):Promise<{removed:boolean;dataRoot:string}>{
   const packageRoot=resolve(options.packageRoot),locations=assertLocations(options,packageVersion);
   if(!samePath(packageRoot,locations.installRoot))throw new Error('Refusing to uninstall outside the exact install root');
   const installed=stat(locations.installRoot);
@@ -103,6 +140,7 @@ export async function uninstallPreview(options:InstallOptions):Promise<{removed:
   assertOwnedDirectory(locations.installRoot,packageVersion);
   readManifest(locations.installRoot);
   assertCommandAvailable(locations.commandPath,join(locations.installRoot,'bin','streamhub'));
+  await options.beforeRemove?.();
   if(stat(locations.commandPath))unlinkSync(locations.commandPath);
   rmSync(locations.installRoot,{recursive:true});
   return{removed:true,dataRoot:locations.dataRoot};
