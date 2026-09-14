@@ -24,7 +24,13 @@ const stat=(path:string)=>{try{return lstatSync(path);}catch(error){if((error as
 const canonical=(path:string)=>{try{return realpathSync(path);}catch{return resolve(path);}};
 const samePath=(left:string,right:string)=>canonical(left)===canonical(right);
 const readManifest=(packageRoot:string)=>validateReleaseManifest(JSON.parse(readFileSync(join(packageRoot,'manifest.json'),'utf8')));
-const readMarker=(installRoot:string):InstallMarker|undefined=>{try{const value=JSON.parse(readFileSync(join(installRoot,markerName),'utf8')) as Partial<InstallMarker>;if(value.name==='streamhub-preview'&&typeof value.version==='string'&&typeof value.gitCommit==='string')return value as InstallMarker;}catch{}return undefined;};
+const markerFromValue=(value:unknown):InstallMarker|undefined=>{
+  if(typeof value!=='object'||value===null)return undefined;
+  const marker=value as Partial<InstallMarker>;
+  return marker.name==='streamhub-preview'&&typeof marker.version==='string'&&typeof marker.gitCommit==='string'?marker as InstallMarker:undefined;
+};
+const readMarker=(installRoot:string):InstallMarker|undefined=>{try{return markerFromValue(JSON.parse(readFileSync(join(installRoot,markerName),'utf8')));}catch{return undefined;}};
+const inspectMarker=(installRoot:string):InstallMarker|undefined=>markerFromValue(JSON.parse(readFileSync(join(installRoot,markerName),'utf8')));
 
 export function parseInstallerArguments(argv:string[]):InstallerArguments{
   const usage=()=>new Error('Usage: install.sh [--prefix /absolute/path] or uninstall.sh [--prefix /absolute/path]');
@@ -69,7 +75,7 @@ function assertCommandAvailable(commandPath:string,target:string){
 }
 
 function isNewPayload(installRoot:string,manifest:InstallMarker):boolean{
-  const marker=readMarker(installRoot);
+  const marker=inspectMarker(installRoot);
   return marker?.version===manifest.version&&marker.gitCommit===manifest.gitCommit;
 }
 
@@ -134,11 +140,13 @@ export async function installPreview<State=never>(options:InstallOptions<State>)
   }catch(error){
     const failures:RecoveryFailure[]=[];
     const recover=(step:string,operation:()=>void)=>{try{operation();}catch(recoveryError){failures.push({step,error:recoveryError});}};
+    let newPayload=false,restoredRoot:string|undefined;
     recover('staging cleanup',()=>{if(stat(staging))rmSync(staging,{recursive:true});});
-    recover('new payload removal',()=>{if(published&&isNewPayload(locations.installRoot,{name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit}))rmSync(locations.installRoot,{recursive:true});});
+    recover('new payload inspection',()=>{newPayload=published&&isNewPayload(locations.installRoot,{name:'streamhub-preview',version:manifest.version,gitCommit:manifest.gitCommit});});
+    recover('new payload removal',()=>{if(newPayload)rmSync(locations.installRoot,{recursive:true});});
     recover('payload restoration',()=>{if(stat(backup))renameSync(backup,locations.installRoot);});
     recover('command restoration',()=>{if(commandTouched)restoreCommand(locations.commandPath,target,commandWasPresent);});
-    const restoredRoot=existing&&isNewPayload(locations.installRoot,existing)?locations.installRoot:undefined;
+    recover('restored payload inspection',()=>{if(existing&&isNewPayload(locations.installRoot,existing))restoredRoot=locations.installRoot;});
     if(servicePrepared){
       try{await options.service!.rollback(serviceState as State,{restoredRoot});}
       catch(rollbackError){failures.push({step:'service rollback',error:rollbackError});}

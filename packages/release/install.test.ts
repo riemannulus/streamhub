@@ -140,6 +140,20 @@ test('recovery keeps the activation failure primary and still rolls back after a
   expect(events).toEqual(['rollback']);
 });
 
+test('recovery guards a failed payload inspection and rolls back without a restored root',async()=>{
+  const h=await fixture({installedCommit:'a'.repeat(40),packageCommit:'b'.repeat(40)}),installRoot=join(h.applicationRoot,'app','0.1.0-preview.1');
+  let failure:Error|undefined,restoredRoot:string|undefined;
+  try{await installPreview({...h.options,service:{
+    prepare:async()=>({wasEnabled:true}),
+    activate:async()=>{unlinkSync(join(installRoot,'.streamhub-preview-install.json'));mkdirSync(join(installRoot,'.streamhub-preview-install.json'));throw new Error('activation failed');},
+    rollback:async(_state,context)=>{restoredRoot=context.restoredRoot;},
+  }});}catch(error){failure=error as Error;}
+  expect(failure?.message).toContain('activation failed');
+  expect(failure?.message).toContain('EISDIR');
+  expect(failure?.message).not.toContain(h.applicationRoot);
+  expect(restoredRoot).toBeUndefined();
+});
+
 test('installer arguments allow one absolute smoke prefix only',()=>{
   expect(parseInstallerArguments(['install'])).toEqual({operation:'install'});
   expect(parseInstallerArguments(['uninstall','--prefix','/private/tmp/streamhub-preview'])).toEqual({operation:'uninstall',prefix:'/private/tmp/streamhub-preview'});
