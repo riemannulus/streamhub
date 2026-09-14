@@ -17,7 +17,7 @@ type Fixture={
 
 const missingService='Could not find service "com.streamhub.runtime" in domain for system';
 
-async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean}={}):Promise<Fixture>{
+async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number}={}):Promise<Fixture>{
   const directory=await mkdtemp(join(tmpdir(),'streamhub-daemon-'));
   const input:LaunchAgentInput={
     home:join(directory,'home'),
@@ -43,10 +43,13 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
     failBootstrap:options.failBootstrap??0,
     failBootout:options.failBootout??false,
   };
+  let printCount=0;
   const runner=async(argv:readonly string[]):Promise<CommandResult>=>{
     recorded.commands.push([...argv]);
     if(argv[0]==='/usr/bin/plutil') return {code:0,stdout:'',stderr:''};
     if(argv[1]==='print'){
+      printCount++;
+      if(printCount===options.failPrintOn) return {code:1,stdout:'token=private',stderr:'path=/private/secret'};
       return recorded.loaded
         ? {code:0,stdout:`state = ${recorded.running?'running':'exited'}\npid = ${recorded.running?'123':'0'}\nlast exit code = 7`,stderr:''}
         : {code:113,stdout:'',stderr:missingService};
@@ -83,9 +86,10 @@ test('enable validates, publishes, bootstraps, and leaves a live identical job u
   const h=await daemonFixture();
   try{
     expect(await h.daemon.enable()).toEqual({enabled:true,loaded:true,running:true,pid:123,lastExitStatus:7});
-    const temporary=h.recorded.commands[0]?.[2];
+    const temporary=h.recorded.commands[1]?.[2];
     expect(temporary).toMatch(new RegExp(`^${h.paths.plistPath.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\..+\\.tmp$`));
     expect(h.recorded.commands).toEqual([
+      ['/bin/launchctl','print',h.paths.service],
       ['/usr/bin/plutil','-lint',temporary!],
       ['/bin/launchctl','bootstrap',h.paths.domain,h.paths.plistPath],
       ['/bin/launchctl','print',h.paths.service],
@@ -93,6 +97,15 @@ test('enable validates, publishes, bootstraps, and leaves a live identical job u
     h.recorded.commands.length=0;
     await h.daemon.enable();
     expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
+  }finally{await h.cleanup();}
+});
+
+test('enable refuses an unowned loaded service when its plist is absent',async()=>{
+  const h=await daemonFixture({loaded:true,running:true});
+  try{
+    await expect(h.daemon.enable()).rejects.toThrow('unowned loaded LaunchAgent');
+    expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
+    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
   }finally{await h.cleanup();}
 });
 
@@ -137,6 +150,19 @@ test('failed replacement bootstrap restores prior bytes and its loaded job',asyn
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
     expect(h.recorded.loaded).toBe(true);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','bootstrap']);
+  }finally{await h.cleanup();}
+});
+
+test('failed post-bootstrap status verification restores prior bytes and loaded state',async()=>{
+  const h=await daemonFixture({loaded:true,running:true,failPrintOn:2});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  const previous=renderLaunchAgent(oldInput);
+  try{
+    await writeFile(h.paths.plistPath,previous);
+    await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
+    expect(h.recorded.loaded).toBe(true);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','print','bootstrap']);
   }finally{await h.cleanup();}
 });
 
@@ -222,5 +248,29 @@ test('managed log helpers reject symbolic links',async()=>{
     await symlink(target,h.paths.logPath);
     expect(()=>prepareRuntimeLog(h.paths)).toThrow('symbolic');
     expect(()=>readRuntimeLog(h.paths)).toThrow('symbolic');
+  }finally{await h.cleanup();}
+});
+
+test('managed log helpers reject forged paths without touching arbitrary files',async()=>{
+  const h=await daemonFixture();
+  const target=join(tmpdir(),`streamhub-forged-${crypto.randomUUID()}.log`);
+  const forged={...h.paths,logPath:target,previousLogPath:`${target}.1`};
+  try{
+    expect(()=>prepareRuntimeLog(forged)).toThrow('managed runtime log paths');
+    expect(()=>readRuntimeLog(forged)).toThrow('managed runtime log paths');
+    await expect(lstat(target)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
+test('public boundaries redact runner failures and path details',async()=>{
+  const h=await daemonFixture();
+  const runner=async():Promise<CommandResult>=>{throw new Error('token=private path=/private/secret');};
+  const daemon=createRuntimeDaemon({...h.input,runner});
+  try{
+    for(const operation of [()=>daemon.status(),()=>daemon.enable(),()=>daemon.disable(),()=>daemon.restart()]){
+      const error=await operation().then(()=>undefined,error=>error as Error);
+      expect(error?.message).not.toContain('private');
+      expect(error?.message).not.toContain('/private');
+    }
   }finally{await h.cleanup();}
 });

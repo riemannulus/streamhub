@@ -1,7 +1,7 @@
 import {closeSync,chmodSync,lstatSync,mkdirSync,openSync,readSync,renameSync,unlinkSync} from 'node:fs';
 import {lstat,mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
 import {dirname} from 'node:path';
-import {launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
+import {launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,runtimeLabel,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
 
 export type CommandResult={code:number;stdout:string;stderr:string};
 export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
@@ -22,6 +22,14 @@ const rolloverBytes=5*1024*1024;
 
 function publicError(action:string):Error{
   return new Error(`Unable to ${action} Streamhub runtime service`);
+}
+
+function publicLogError(action:string):Error{
+  return new Error(`Unable to ${action} Streamhub runtime log`);
+}
+
+function isDecisionError(error:unknown):boolean{
+  return error instanceof Error&&(error.message.startsWith('Refusing ')||error.message==='Streamhub runtime is not enabled');
 }
 
 function isMissing(error:unknown):boolean{
@@ -77,7 +85,22 @@ function inspectLog(path:string):ReturnType<typeof lstatSync>|undefined{
   }
 }
 
-export function prepareRuntimeLog(paths:LaunchAgentPaths):string{
+function assertManagedLogPaths(paths:LaunchAgentPaths):void{
+  const domain=paths.domain.match(/^gui\/([1-9]\d*)$/);
+  const plistSuffix=`/Library/LaunchAgents/${runtimeLabel}.plist`;
+  if(!domain||!Number.isSafeInteger(Number(domain[1]))||!paths.plistPath.endsWith(plistSuffix)){
+    throw new Error('Refusing unmanaged runtime log paths');
+  }
+  const home=paths.plistPath.slice(0,-plistSuffix.length);
+  const dataPath=`${home}/Library/Application Support/Streamhub/data`;
+  if(!home||paths.label!==runtimeLabel||paths.service!==`${paths.domain}/${runtimeLabel}`||
+    paths.configPath!==`${dataPath}/config.json`||paths.logPath!==`${dataPath}/logs/runtime.log`||
+    paths.previousLogPath!==`${dataPath}/logs/runtime.log.1`){
+    throw new Error('Refusing unmanaged runtime log paths');
+  }
+}
+
+function prepareRuntimeLogUnsafe(paths:LaunchAgentPaths):string{
   const existing=inspectLog(paths.logPath);
   if(!existing){
     mkdirSync(dirname(paths.logPath),{recursive:true,mode:0o700});
@@ -88,36 +111,52 @@ export function prepareRuntimeLog(paths:LaunchAgentPaths):string{
   return paths.logPath;
 }
 
+export function prepareRuntimeLog(paths:LaunchAgentPaths):string{
+  try{
+    assertManagedLogPaths(paths);
+    return prepareRuntimeLogUnsafe(paths);
+  }catch(error){
+    if(isDecisionError(error)) throw error;
+    throw publicLogError('prepare');
+  }
+}
+
 function rollRuntimeLog(paths:LaunchAgentPaths):void{
   const current=inspectLog(paths.logPath);
   if(!current){
-    prepareRuntimeLog(paths);
+    prepareRuntimeLogUnsafe(paths);
     return;
   }
   if(current.size<=rolloverBytes) return;
   const previous=inspectLog(paths.previousLogPath);
   if(previous) unlinkSync(paths.previousLogPath);
   renameSync(paths.logPath,paths.previousLogPath);
-  prepareRuntimeLog(paths);
+  prepareRuntimeLogUnsafe(paths);
 }
 
 export function readRuntimeLog(paths:LaunchAgentPaths,maxBytes=maxLogBytes):string{
-  const info=inspectLog(paths.logPath);
-  if(!info) return '';
-  const requested=Number.isFinite(maxBytes)?Math.floor(maxBytes):maxLogBytes;
-  const bytes=Math.max(0,Math.min(maxLogBytes,requested));
-  if(bytes===0) return '';
-  const size=Number(info.size);
-  const length=Math.min(size,bytes);
-  const buffer=Buffer.alloc(length);
-  const descriptor=openSync(paths.logPath,'r');
-  try{readSync(descriptor,buffer,0,length,size-length);}finally{closeSync(descriptor);}
-  const text=buffer.toString('utf8');
-  const endsWithNewline=text.endsWith('\n');
-  const lines=text.split('\n');
-  if(endsWithNewline) lines.pop();
-  const recent=lines.slice(-200).join('\n');
-  return endsWithNewline&&recent?`${recent}\n`:recent;
+  try{
+    assertManagedLogPaths(paths);
+    const info=inspectLog(paths.logPath);
+    if(!info) return '';
+    const requested=Number.isFinite(maxBytes)?Math.floor(maxBytes):maxLogBytes;
+    const bytes=Math.max(0,Math.min(maxLogBytes,requested));
+    if(bytes===0) return '';
+    const size=Number(info.size);
+    const length=Math.min(size,bytes);
+    const buffer=Buffer.alloc(length);
+    const descriptor=openSync(paths.logPath,'r');
+    try{readSync(descriptor,buffer,0,length,size-length);}finally{closeSync(descriptor);}
+    const text=buffer.toString('utf8');
+    const endsWithNewline=text.endsWith('\n');
+    const lines=text.split('\n');
+    if(endsWithNewline) lines.pop();
+    const recent=lines.slice(-200).join('\n');
+    return endsWithNewline&&recent?`${recent}\n`:recent;
+  }catch(error){
+    if(isDecisionError(error)) throw error;
+    throw publicLogError('read');
+  }
 }
 
 async function boundedOutput(stream:ReadableStream<Uint8Array>|null):Promise<string>{
@@ -215,12 +254,20 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     }
   }
 
+  async function safeLifecycle<T>(action:'enable'|'disable'|'restart'|'inspect',operation:()=>Promise<T>):Promise<T>{
+    try{return await operation();}catch(error){
+      if(isDecisionError(error)) throw error;
+      throw publicError(action);
+    }
+  }
+
   return {
     paths,
-    status,
-    async enable():Promise<DaemonStatus>{
+    status:()=>safeLifecycle('inspect',status),
+    enable:()=>safeLifecycle('enable',async():Promise<DaemonStatus>=>{
       const previous=await readDefinition(paths,input);
-      const initial=previous.exists?await inspect():{loaded:false,running:false};
+      const initial=await inspect();
+      if(initial.loaded&&!previous.exists) throw new Error('Refusing to replace an unowned loaded LaunchAgent');
       const desired=renderLaunchAgent(input);
       const changed=previous.bytes!==desired;
       if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
@@ -233,14 +280,13 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
         if(changed) await publishDefinition(paths,desired,runner);
         const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
         if(bootstrap.code!==0) throw publicError('enable');
+        return await status();
       }catch(error){
         try{await restore(previous,initial.loaded);}catch{ /* Preserve the primary public failure. */ }
-        if(error instanceof Error&&error.message.startsWith('Unable to ')) throw error;
-        throw publicError('enable');
+        throw error;
       }
-      return status();
-    },
-    async disable():Promise<DaemonStatus>{
+    }),
+    disable:()=>safeLifecycle('disable',async():Promise<DaemonStatus>=>{
       const previous=await readDefinition(paths,input);
       const current=await inspect();
       if(!previous.exists){
@@ -253,8 +299,8 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       }
       await unlink(paths.plistPath);
       return {enabled:false,loaded:false,running:false};
-    },
-    async restart():Promise<DaemonStatus>{
+    }),
+    restart:()=>safeLifecycle('restart',async():Promise<DaemonStatus>=>{
       const previous=await readDefinition(paths,input);
       const current=await inspect();
       if(!previous.exists||!current.loaded) throw new Error('Streamhub runtime is not enabled');
@@ -262,6 +308,6 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       const kickstart=await runner([launchctl,'kickstart','-k',paths.service]);
       if(kickstart.code!==0) throw publicError('restart');
       return status();
-    },
+    }),
   };
 }
