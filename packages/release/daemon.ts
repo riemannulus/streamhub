@@ -1,0 +1,267 @@
+import {closeSync,chmodSync,lstatSync,mkdirSync,openSync,readSync,renameSync,unlinkSync} from 'node:fs';
+import {lstat,mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
+import {dirname} from 'node:path';
+import {launchAgentPaths,parseLaunchctlPrint,renderLaunchAgent,validateOwnedLaunchAgent,type LaunchAgentInput,type LaunchAgentPaths} from './launch-agent';
+
+export type CommandResult={code:number;stdout:string;stderr:string};
+export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
+export type DaemonStatus={enabled:boolean;loaded:boolean;running:boolean;pid?:number;lastExitStatus?:number};
+export type DaemonOptions=LaunchAgentInput&{runner?:CommandRunner};
+export type RuntimeDaemon={
+  enable():Promise<DaemonStatus>;
+  disable():Promise<DaemonStatus>;
+  restart():Promise<DaemonStatus>;
+  status():Promise<DaemonStatus>;
+  paths:LaunchAgentPaths;
+};
+
+const launchctl='/bin/launchctl';
+const plutil='/usr/bin/plutil';
+const maxLogBytes=64*1024;
+const rolloverBytes=5*1024*1024;
+
+function publicError(action:string):Error{
+  return new Error(`Unable to ${action} Streamhub runtime service`);
+}
+
+function isMissing(error:unknown):boolean{
+  return typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='ENOENT';
+}
+
+function unescapeXml(value:string):string{
+  return value.replace(/&(amp|lt|gt|quot|apos);/g,(_,entity:string)=>({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"})[entity]!);
+}
+
+function valueAfterKey(xml:string,key:string):string|undefined{
+  const expression=new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`);
+  const match=xml.match(expression);
+  return match?.[1]===undefined?undefined:unescapeXml(match[1]);
+}
+
+function legacyOwnedInput(xml:string,input:LaunchAgentInput):LaunchAgentInput|undefined{
+  const argumentsMatch=xml.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>\s*<string>([^<]*)<\/string>\s*<\/array>/);
+  const packageRoot=valueAfterKey(xml,'WorkingDirectory');
+  if(!argumentsMatch||!packageRoot) return undefined;
+  const candidate={...input,bunPath:unescapeXml(argumentsMatch[1]!),packageRoot:unescapeXml(packageRoot)};
+  try{
+    validateOwnedLaunchAgent(xml,candidate);
+    return candidate;
+  }catch{
+    return undefined;
+  }
+}
+
+function validateManagedDefinition(bytes:string,input:LaunchAgentInput):void{
+  try{
+    validateOwnedLaunchAgent(bytes,input);
+    return;
+  }catch{
+    if(legacyOwnedInput(bytes,input)) return;
+  }
+  throw new Error('Refusing to modify an unowned LaunchAgent definition');
+}
+
+function assertRegular(path:string,kind:string):void{
+  const info=lstatSync(path);
+  if(info.isSymbolicLink()) throw new Error(`Refusing symbolic ${kind}`);
+  if(!info.isFile()) throw new Error(`Refusing non-regular ${kind}`);
+}
+
+function inspectLog(path:string):ReturnType<typeof lstatSync>|undefined{
+  try{
+    assertRegular(path,'runtime log');
+    return lstatSync(path);
+  }catch(error){
+    if(isMissing(error)) return undefined;
+    throw error;
+  }
+}
+
+export function prepareRuntimeLog(paths:LaunchAgentPaths):string{
+  const existing=inspectLog(paths.logPath);
+  if(!existing){
+    mkdirSync(dirname(paths.logPath),{recursive:true,mode:0o700});
+    const descriptor=openSync(paths.logPath,'wx',0o600);
+    closeSync(descriptor);
+  }
+  chmodSync(paths.logPath,0o600);
+  return paths.logPath;
+}
+
+function rollRuntimeLog(paths:LaunchAgentPaths):void{
+  const current=inspectLog(paths.logPath);
+  if(!current){
+    prepareRuntimeLog(paths);
+    return;
+  }
+  if(current.size<=rolloverBytes) return;
+  const previous=inspectLog(paths.previousLogPath);
+  if(previous) unlinkSync(paths.previousLogPath);
+  renameSync(paths.logPath,paths.previousLogPath);
+  prepareRuntimeLog(paths);
+}
+
+export function readRuntimeLog(paths:LaunchAgentPaths,maxBytes=maxLogBytes):string{
+  const info=inspectLog(paths.logPath);
+  if(!info) return '';
+  const requested=Number.isFinite(maxBytes)?Math.floor(maxBytes):maxLogBytes;
+  const bytes=Math.max(0,Math.min(maxLogBytes,requested));
+  if(bytes===0) return '';
+  const size=Number(info.size);
+  const length=Math.min(size,bytes);
+  const buffer=Buffer.alloc(length);
+  const descriptor=openSync(paths.logPath,'r');
+  try{readSync(descriptor,buffer,0,length,size-length);}finally{closeSync(descriptor);}
+  const text=buffer.toString('utf8');
+  const endsWithNewline=text.endsWith('\n');
+  const lines=text.split('\n');
+  if(endsWithNewline) lines.pop();
+  const recent=lines.slice(-200).join('\n');
+  return endsWithNewline&&recent?`${recent}\n`:recent;
+}
+
+async function boundedOutput(stream:ReadableStream<Uint8Array>|null):Promise<string>{
+  if(!stream) return '';
+  const reader=stream.getReader();
+  const chunks:Uint8Array[]=[];
+  let size=0;
+  try{
+    while(true){
+      const next=await reader.read();
+      if(next.done) break;
+      const available=Math.max(0,maxLogBytes-size);
+      if(available>0) chunks.push(next.value.slice(0,available));
+      size+=next.value.length;
+    }
+  }finally{reader.releaseLock();}
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+async function defaultRunner(argv:readonly string[]):Promise<CommandResult>{
+  const process=Bun.spawn([...argv],{stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+  const [code,stdout,stderr]=await Promise.all([process.exited,boundedOutput(process.stdout),boundedOutput(process.stderr)]);
+  return {code,stdout,stderr};
+}
+
+async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<{exists:boolean;bytes?:string}>{
+  try{
+    const info=await lstat(paths.plistPath);
+    if(info.isSymbolicLink()) throw new Error('Refusing symbolic LaunchAgent definition');
+    if(!info.isFile()) throw new Error('Refusing non-regular LaunchAgent definition');
+    const bytes=await readFile(paths.plistPath,'utf8');
+    validateManagedDefinition(bytes,input);
+    return {exists:true,bytes};
+  }catch(error){
+    if(isMissing(error)) return {exists:false};
+    throw error;
+  }
+}
+
+async function writeMode0600(path:string,bytes:string):Promise<void>{
+  const file=await open(path,'w',0o600);
+  try{
+    await file.writeFile(bytes);
+    await file.chmod(0o600);
+  }finally{await file.close();}
+}
+
+async function publishDefinition(paths:LaunchAgentPaths,bytes:string,runner:CommandRunner):Promise<void>{
+  await mkdir(dirname(paths.plistPath),{recursive:true,mode:0o700});
+  const temporary=`${paths.plistPath}.${crypto.randomUUID()}.tmp`;
+  try{
+    const file=await open(temporary,'wx',0o600);
+    try{
+      await file.writeFile(bytes);
+      await file.chmod(0o600);
+    }finally{await file.close();}
+    const validation=await runner([plutil,'-lint',temporary]);
+    if(validation.code!==0) throw publicError('validate');
+    await rename(temporary,paths.plistPath);
+    chmodSync(paths.plistPath,0o600);
+  }catch(error){
+    try{await unlink(temporary);}catch(unlinkError){if(!isMissing(unlinkError)) throw unlinkError;}
+    throw error;
+  }
+}
+
+export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
+  const input:LaunchAgentInput={home:options.home,uid:options.uid,bunPath:options.bunPath,packageRoot:options.packageRoot};
+  const paths=launchAgentPaths(input);
+  const runner=options.runner??defaultRunner;
+
+  async function inspect(){
+    const result=await runner([launchctl,'print',paths.service]);
+    if(result.code===0) return parseLaunchctlPrint(result.stdout);
+    if(/could not find service|service .* not found/i.test(`${result.stdout}\n${result.stderr}`)){
+      return {loaded:false,running:false};
+    }
+    throw publicError('inspect');
+  }
+
+  async function status():Promise<DaemonStatus>{
+    const definition=await readDefinition(paths,input);
+    const current=await inspect();
+    return {enabled:definition.exists,loaded:current.loaded,running:current.running,...(current.pid===undefined?{}:{pid:current.pid}),...(current.lastExitStatus===undefined?{}:{lastExitStatus:current.lastExitStatus})};
+  }
+
+  async function restore(previous:{exists:boolean;bytes?:string},wasLoaded:boolean):Promise<void>{
+    try{
+      if(previous.exists&&previous.bytes!==undefined) await writeMode0600(paths.plistPath,previous.bytes);
+      else await unlink(paths.plistPath);
+    }catch(error){if(!isMissing(error)) throw error;}
+    if(wasLoaded){
+      const result=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
+      if(result.code!==0) throw publicError('restore');
+    }
+  }
+
+  return {
+    paths,
+    status,
+    async enable():Promise<DaemonStatus>{
+      const previous=await readDefinition(paths,input);
+      const initial=previous.exists?await inspect():{loaded:false,running:false};
+      const desired=renderLaunchAgent(input);
+      const changed=previous.bytes!==desired;
+      if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
+      rollRuntimeLog(paths);
+      if(initial.loaded){
+        const bootout=await runner([launchctl,'bootout',paths.service]);
+        if(bootout.code!==0) throw publicError('disable');
+      }
+      try{
+        if(changed) await publishDefinition(paths,desired,runner);
+        const bootstrap=await runner([launchctl,'bootstrap',paths.domain,paths.plistPath]);
+        if(bootstrap.code!==0) throw publicError('enable');
+      }catch(error){
+        try{await restore(previous,initial.loaded);}catch{ /* Preserve the primary public failure. */ }
+        if(error instanceof Error&&error.message.startsWith('Unable to ')) throw error;
+        throw publicError('enable');
+      }
+      return status();
+    },
+    async disable():Promise<DaemonStatus>{
+      const previous=await readDefinition(paths,input);
+      const current=await inspect();
+      if(!previous.exists){
+        if(current.loaded) throw new Error('Refusing to disable an unowned loaded LaunchAgent');
+        return {enabled:false,loaded:false,running:false};
+      }
+      if(current.loaded){
+        const bootout=await runner([launchctl,'bootout',paths.service]);
+        if(bootout.code!==0) throw publicError('disable');
+      }
+      await unlink(paths.plistPath);
+      return {enabled:false,loaded:false,running:false};
+    },
+    async restart():Promise<DaemonStatus>{
+      const previous=await readDefinition(paths,input);
+      const current=await inspect();
+      if(!previous.exists||!current.loaded) throw new Error('Streamhub runtime is not enabled');
+      rollRuntimeLog(paths);
+      const kickstart=await runner([launchctl,'kickstart','-k',paths.service]);
+      if(kickstart.code!==0) throw publicError('restart');
+      return status();
+    },
+  };
+}
