@@ -258,7 +258,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
   const input:LaunchAgentInput={home:options.home,uid:options.uid,bunPath:options.bunPath,packageRoot:options.packageRoot};
   const paths=launchAgentPaths(input);
   const runner=options.runner??defaultRunner;
-  const now=options.now??Date.now;
+  const now=options.now??(()=>performance.now());
   const sleep=options.sleep??(milliseconds=>Bun.sleep(milliseconds));
   const isPidRunning=options.isPidRunning??defaultPidRunning;
   const bootoutTimeoutMs=Number.isSafeInteger(options.bootoutTimeoutMs)&&options.bootoutTimeoutMs!>0
@@ -281,6 +281,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
   }
 
   async function bootoutAndWait(current:ReturnType<typeof parseLaunchctlPrint>):Promise<void>{
+    if(current.running&&current.pid===undefined) throw publicError('verify runtime exit');
     const bootout=await runner([launchctl,'bootout',paths.service]);
     if(bootout.code!==0) throw publicError('disable');
     const deadline=now()+bootoutTimeoutMs;

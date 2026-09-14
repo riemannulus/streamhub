@@ -17,7 +17,7 @@ type Fixture={
 
 const missingService='Could not find service "com.streamhub.runtime" in domain for system';
 
-async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number}={}):Promise<Fixture>{
+async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;reportedPid?:number;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number}={}):Promise<Fixture>{
   const directory=await mkdtemp(join(tmpdir(),'streamhub-daemon-'));
   const input:LaunchAgentInput={
     home:join(directory,'home'),
@@ -55,7 +55,7 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
       if(printCount===options.failPrintOn) return {code:1,stdout:'token=private',stderr:'path=/private/secret'};
       if(bootoutRequested&&recorded.loaded&&unloadPollsRemaining--<=0){recorded.loaded=false;recorded.running=false;recorded.definition=undefined;}
       return recorded.loaded
-        ? {code:0,stdout:`state = ${recorded.running?'running':'exited'}\npid = ${recorded.running?'123':'0'}\nlast exit code = 7`,stderr:''}
+        ? {code:0,stdout:`state = ${recorded.running?'running':'exited'}\npid = ${recorded.running?options.reportedPid??123:0}\nlast exit code = 7`,stderr:''}
         : {code:113,stdout:'',stderr:missingService};
     }
     if(argv[1]==='bootstrap'){
@@ -155,6 +155,16 @@ test('disable waits for the unloaded service and prior PID before deleting its p
   }finally{await h.cleanup();}
 });
 
+test('disable fails closed without bootout when a running service has no valid PID',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,reportedPid:0});
+  try{
+    const previous=await readFile(h.paths.plistPath,'utf8');
+    await expect(h.daemon.disable()).rejects.toThrow('Unable to disable Streamhub runtime service');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
+    expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
+  }finally{await h.cleanup();}
+});
+
 test('replacement enable waits for old unload and PID exit before publishing or bootstrapping',async()=>{
   const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,delayedPidExitPolls:1});
   const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
@@ -164,6 +174,18 @@ test('replacement enable waits for old unload and PID exit before publishing or 
     expect(h.recorded.sleeps).toEqual([50,50]);
     expect(h.recorded.bootstrapBeforePriorPidExit).toBe(false);
     expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','print','-lint','bootstrap','print']);
+  }finally{await h.cleanup();}
+});
+
+test('replacement enable fails closed without bootout when a running service has no valid PID',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,reportedPid:0});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  const previous=renderLaunchAgent(oldInput);
+  try{
+    await writeFile(h.paths.plistPath,previous);
+    await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
+    expect(h.recorded.commands).toEqual([['/bin/launchctl','print',h.paths.service]]);
   }finally{await h.cleanup();}
 });
 
