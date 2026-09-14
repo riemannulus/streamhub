@@ -12,17 +12,19 @@ Streamhub는 Stream Deck 전체를 하나의 화면처럼 꾸미고, 각 키에 
 tar -xzf streamhub-0.1.0-preview.1-macos-arm64.tar.gz
 cd streamhub-0.1.0-preview.1-macos-arm64
 ./install.sh
-streamhub setup
-streamhub start
+streamhub setup hid
+streamhub daemon enable
+streamhub daemon status
+streamhub studio
 ```
 
-`streamhub setup`에서 HID 또는 Plugin을 고릅니다. Runtime은 실행 중인 터미널에서 계속 동작하므로, 새 터미널을 열어 Studio를 실행합니다.
+`streamhub setup hid` 또는 `streamhub setup plugin`에서 디스플레이 소유 방식을 고릅니다. `streamhub daemon enable`은 **Runtime만** 지금 시작하고 다음 로그인 때도 시작하도록 설정합니다. Studio는 로그인 시 자동 실행되지 않습니다. Studio는 별도 터미널에서 다음처럼 직접 실행하며, 그 터미널에서 Ctrl-C를 누를 때까지 foreground로 동작합니다.
 
 ```sh
 streamhub studio
 ```
 
-Studio는 `http://127.0.0.1:31416`에서 열립니다. 브라우저를 자동으로 열지 않으려면 `streamhub studio --no-open`을 사용합니다. Runtime과 Studio를 종료할 때는 각각 실행한 터미널에서 Ctrl-C를 누릅니다.
+Studio는 `http://127.0.0.1:31416`에서 열립니다. 브라우저를 자동으로 열지 않으려면 `streamhub studio --no-open`을 사용합니다. Runtime 로그인 서비스는 Studio나 브라우저를 열지 않습니다.
 
 설치 명령이 보이지 않으면 우선 절대 경로로 확인합니다.
 
@@ -34,25 +36,23 @@ Studio는 `http://127.0.0.1:31416`에서 열립니다. 브라우저를 자동으
 
 ## 연결 방식 선택
 
-두 모드는 같은 Studio 문서와 버튼 동작을 사용합니다. 모드를 바꾼 뒤에는 Runtime을 Ctrl-C로 종료하고 `streamhub start`로 다시 시작해야 합니다. 실패하더라도 다른 모드로 자동 전환하지 않습니다.
+두 모드는 같은 Studio 문서와 버튼 동작을 사용합니다. 로그인 서비스가 켜져 있을 때 모드를 바꾸면 `streamhub daemon restart`로 Runtime에 적용합니다. 서비스를 사용하지 않을 때 `streamhub start`를 다시 실행해 foreground에서 진단할 수 있습니다. 실패하더라도 다른 모드로 자동 전환하지 않습니다.
 
 ### HID
 
 ```sh
 streamhub setup hid
-streamhub start
 ```
 
-Streamhub가 장치를 직접 소유합니다. Stream Deck 앱을 메뉴 막대에서도 완전히 종료한 뒤 시작하세요. 화면 복구와 애니메이션이 더 빠르고 부드러운 방식입니다. Stream Deck 앱의 프로필과 다른 플러그인은 동시에 사용할 수 없습니다.
+Streamhub가 장치를 직접 소유합니다. Stream Deck 앱을 메뉴 막대에서도 완전히 종료하고, **Stream Deck 앱의 로그인 시 실행도 끄세요.** 로그인 때 앱이 먼저 장치를 잡으면 HID Runtime이 시작하지 못합니다. 로그인 서비스가 이미 켜져 있으면 설정을 바꾼 뒤 `streamhub daemon restart`를 실행하세요. 화면 복구와 애니메이션이 더 빠르고 부드러운 방식입니다. Stream Deck 앱의 프로필과 다른 플러그인은 동시에 사용할 수 없습니다.
 
 ### Plugin
 
 ```sh
 streamhub setup plugin
-streamhub start
 ```
 
-공식 Stream Deck 앱이 장치를 소유하고 Streamhub 플러그인이 화면과 입력을 전달합니다. 설치된 프로필과 다른 Stream Deck 기능을 함께 관리하기 쉽지만, 앱과 SDK 전달 구간 때문에 잠금 해제 복구와 애니메이션이 HID보다 느릴 수 있습니다. 설정 후 Stream Deck 앱을 실행하거나 한 번 재시작하세요.
+공식 Stream Deck 앱이 장치를 소유하고 Streamhub 플러그인이 화면과 입력을 전달합니다. 설치된 프로필과 다른 Stream Deck 기능을 함께 관리하기 쉽지만, 앱과 SDK 전달 구간 때문에 잠금 해제 복구와 애니메이션이 HID보다 느릴 수 있습니다. 설정 후 Stream Deck 앱을 실행하거나 한 번 재시작하고, 로그인 서비스가 이미 켜져 있으면 `streamhub daemon restart`로 Runtime에 적용하세요.
 
 현재 상태는 자격 증명을 노출하지 않는 다음 명령으로 확인할 수 있습니다.
 
@@ -61,6 +61,23 @@ streamhub status
 ```
 
 `configuredMode`와 `activeMode`가 다르거나 `restartRequired`가 `true`이면 Runtime을 재시작해야 합니다.
+
+## Runtime 로그인 서비스
+
+설치와 `setup`만으로는 백그라운드 프로세스나 로그인 시작이 생기지 않습니다. 다음 명령만 Runtime LaunchAgent를 관리합니다.
+
+```sh
+streamhub daemon enable
+streamhub daemon disable
+streamhub daemon restart
+streamhub daemon status
+streamhub daemon logs
+streamhub daemon logs --follow
+```
+
+`streamhub daemon enable`은 Runtime만 즉시 시작하고 로그인 때도 시작합니다. `streamhub daemon disable`은 Runtime을 지금 중지하고 다음 로그인 시작도 끕니다. `streamhub daemon restart`는 이미 켜진 Runtime만 다시 시작합니다. `streamhub daemon status`는 서비스와 Runtime의 제한된 상태를 보여 주고, `streamhub daemon logs`는 최근 로그를, `--follow`는 Ctrl-C를 누를 때까지 그 로그를 따라갑니다.
+
+`streamhub start`는 로그인 서비스와 함께 쓰는 명령이 아니라 foreground 진단용입니다. 서비스가 켜져 있으면 먼저 `streamhub daemon disable`을 실행한 다음 `streamhub start`를 실행하세요. Studio는 언제나 `streamhub studio`로 직접 시작하는 foreground 프로그램이며 Ctrl-C로 종료합니다.
 
 ## Studio에서 할 수 있는 일
 
@@ -79,19 +96,19 @@ Plugin 모드의 대기 화면은 플러그인이 키를 소유하는 동안 표
 
 ## 업데이트와 제거
 
-새 버전의 압축 파일을 풀고 그 안에서 `./install.sh`를 다시 실행하면 해당 버전을 설치합니다. 설정, Studio 문서와 이미지 같은 사용자 데이터는 다음 위치에 유지됩니다.
+새 버전의 압축 파일을 풀고 그 안에서 `./install.sh`를 다시 실행하면 해당 버전을 설치합니다. Runtime 로그인 서비스가 켜져 있으면 설치 과정이 Runtime을 안전하게 중지하고 새 설치 경로로 다시 등록한 뒤 시작합니다. 설정, Studio 문서와 이미지 같은 사용자 데이터는 다음 위치에 유지됩니다.
 
 ```text
 ~/Library/Application Support/Streamhub/data
 ```
 
-프로그램만 제거하려면 실행 중인 Runtime과 Studio를 먼저 Ctrl-C로 끝낸 뒤 다음 명령을 사용합니다.
+프로그램만 제거하려면 Studio가 실행 중이면 Ctrl-C로 끝낸 뒤 다음 명령을 사용합니다.
 
 ```sh
 streamhub uninstall
 ```
 
-제거는 현재 버전과 `~/.local/bin/streamhub` 링크만 지웁니다. 사용자 데이터, 설치된 Stream Deck 플러그인과 연결 정보는 보존됩니다.
+제거는 먼저 관리 중인 Runtime 로그인 서비스를 중지하고 제거한 다음 현재 버전과 `~/.local/bin/streamhub` 링크를 지웁니다. 사용자 데이터, 설치된 Stream Deck 플러그인과 연결 정보는 보존됩니다.
 
 ## 문제 해결
 
@@ -101,15 +118,27 @@ streamhub uninstall
 
 **31415 또는 31416 포트를 이미 사용 중이라고 나옴**
 
-다른 터미널에서 실행 중인 Streamhub Runtime이나 Studio를 찾아 Ctrl-C로 종료하세요. `lsof -nP -iTCP:31415 -sTCP:LISTEN`과 `lsof -nP -iTCP:31416 -sTCP:LISTEN`으로 소유 프로세스를 확인할 수 있습니다.
+31415는 `streamhub daemon status`로 Runtime 서비스 상태를 먼저 확인하세요. Studio(31416)는 실행한 터미널에서 Ctrl-C로 종료합니다. `lsof -nP -iTCP:31415 -sTCP:LISTEN`과 `lsof -nP -iTCP:31416 -sTCP:LISTEN`으로 소유 프로세스를 확인할 수 있습니다.
+
+**`streamhub start`가 서비스를 끄라고 함**
+
+Runtime 로그인 서비스와 foreground 진단은 동시에 실행할 수 없습니다. `streamhub daemon disable`을 실행한 뒤 `streamhub start`를 다시 실행하세요. 진단이 끝나면 `streamhub daemon enable`로 로그인 서비스를 다시 켭니다.
 
 **HID 모드에서 장치를 열 수 없음**
 
-Stream Deck 앱을 창만 닫지 말고 메뉴 막대에서 완전히 종료하고 USB 연결을 확인한 뒤 Runtime을 다시 시작합니다.
+Stream Deck 앱을 창만 닫지 말고 메뉴 막대에서 완전히 종료하고, 앱 설정에서 로그인 시 실행을 끈 뒤 USB 연결을 확인하세요. 그 다음 `streamhub daemon restart`를 실행합니다.
 
 **Plugin 모드가 연결되지 않음**
 
-Stream Deck 앱을 실행하거나 재시작하고 Streamhub 프로필이 설치되었는지 확인한 뒤 `streamhub status`를 봅니다. 모드를 방금 바꿨다면 Runtime도 재시작합니다.
+Stream Deck 앱을 실행하거나 재시작하고 Streamhub 프로필이 설치되었는지 확인한 뒤 `streamhub status`를 봅니다. 모드를 방금 바꿨다면 `streamhub daemon restart`로 Runtime도 재시작합니다.
+
+**Runtime이 반복해서 다시 시작되거나 준비되지 않음**
+
+`streamhub daemon status`와 `streamhub daemon logs`로 최근 종료 상태와 로그를 확인하세요. 설정이나 장치 문제를 고친 뒤 `streamhub daemon restart`를 실행합니다. 서비스가 필요 없으면 `streamhub daemon disable`로 중지할 수 있습니다.
+
+**LaunchAgent plist가 다른 앱의 것이거나 수정되었다고 나옴**
+
+`~/Library/LaunchAgents/com.streamhub.runtime.plist`는 Streamhub가 소유한 정의만 관리합니다. 다른 앱의 파일, 심볼릭 링크, 또는 직접 수정한 파일은 덮어쓰거나 삭제하지 않습니다. 파일 소유자와 내용을 확인해 원인을 해결한 뒤 다시 시도하고, 확실하지 않으면 제거하지 마세요.
 
 **앱·파일 선택이나 창 정보 기능이 동작하지 않음**
 

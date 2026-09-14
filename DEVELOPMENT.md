@@ -23,6 +23,30 @@ bun run package
 
 `check`는 TypeScript 검사와 Bun 테스트를 실행합니다. macOS에서는 Swift 잠금 상태 회귀 테스트도 컴파일하므로 Xcode Command Line Tools가 필요합니다. HTTP 통합 테스트는 임시 loopback 포트를 사용합니다. `demo`는 임시 DB/서버에서 13개 세션 입력, 동시 push와 스냅샷, 실패한 수집, 두 번 누락 후 철회, 재시작 복구를 실행하고 자원을 정리합니다.
 
+## Runtime LaunchAgent와 패키지
+
+배포본은 서명·공증 전 Apple Silicon macOS Preview이며, Runtime 로그인 서비스는 `com.streamhub.runtime` 하나뿐입니다. Studio는 LaunchAgent가 아니며 항상 `streamhub studio`가 시작하는 foreground 프로세스입니다. 사용자 사용 흐름은 [README](README.md), 설계 결정은 [Runtime LaunchAgent 설계](docs/superpowers/specs/2026-09-14-runtime-launchagent-design.md), 구현 순서는 [Runtime LaunchAgent 계획](docs/superpowers/plans/2026-09-14-runtime-launchagent.md)을 참고하세요.
+
+LaunchAgent는 `~/Library/LaunchAgents/com.streamhub.runtime.plist`에 생성됩니다. 설치된 프로그램은 `~/Library/Application Support/Streamhub/app/<version>`에, 사용자 설정·문서·데이터베이스·로그는 `~/Library/Application Support/Streamhub/data`에 있습니다. 서비스 로그의 정확한 경로는 `~/Library/Application Support/Streamhub/data/logs/runtime.log`이며, 제거해도 data 디렉터리는 보존됩니다.
+
+서비스 모듈은 신뢰 경계를 엄격히 둡니다. 현재 사용자 `gui/<uid>`의 정확한 레이블만 literal argv로 `launchctl`에 전달하고, plist를 쓰거나 지우기 전에 일반 파일·소유 마커·레이블·설치 루트 인자를 검증합니다. 심볼릭 링크, 외부 경로, 외부 plist는 채택·변경·삭제하지 않습니다. 생성 plist는 같은 디렉터리에 0600 임시 파일로 쓰고 `plutil`로 확인한 뒤 원자적으로 공개합니다. 로그도 관리된 일반 파일만 읽거나 follow합니다. 이 구현은 로컬 신뢰 코드 경계이며, Runtime이나 Studio에 서비스 제어 권한을 넓히지 않습니다.
+
+`packages/release/daemon.test.ts`는 실제 `launchctl` 대신 주입한 fake runner와 임시 홈으로 enable/disable/restart, rollback, 소유권 거부, 로그 제한을 검증합니다. `packages/release/launch-agent.test.ts`는 생성/검증 규칙을, `packages/release/cli.test.ts`는 명령 문법과 foreground 배제를, `packages/release/install.test.ts`는 업데이트와 제거 순서를 검증합니다. 이 테스트는 실제 사용자 LaunchAgent, 기기, Studio 브라우저를 조작하지 않습니다.
+
+서비스가 켜진 패키지 업데이트는 (1) 기존 소유 서비스를 검사하고 중지, (2) 새 표시된 payload를 설치·검증, (3) 새 절대 경로로 plist를 다시 생성하고 Runtime을 활성화하는 순서입니다. 어느 단계가 실패하면 이전 payload와 서비스 상태를 복구합니다. uninstall은 서비스와 소유 plist를 먼저 제거하며, 안전하게 중지할 수 없으면 프로그램 경로를 보존합니다.
+
+실제 사용자 수용 검증은 별도 승인을 받은 뒤에만 합니다. foreground Runtime을 끄고, HID이면 Stream Deck 앱을 종료하고 로그인 시 실행도 해제한 상태에서 다음을 실행합니다.
+
+```sh
+streamhub setup hid
+streamhub daemon enable
+streamhub daemon status
+streamhub daemon restart
+streamhub daemon logs
+```
+
+Runtime만 실행되고 Studio나 브라우저가 열리지 않는지, `streamhub start`가 daemon disable을 안내하는지 확인합니다. 이어서 Studio를 수동 실행해 Ctrl-C로 종료해도 Runtime이 유지되는지 확인합니다. 로그인식 재등록, enabled 상태 업데이트, `streamhub daemon disable`, 보존 uninstall은 [계획의 수용 절차](docs/superpowers/plans/2026-09-14-runtime-launchagent.md#task-6-full-archive-verification-and-real-user-launchagent-acceptance)를 따르며, 실제 `launchctl`·기기·Studio 브라우저 조작은 명시적 사용자 승인 없이는 하지 않습니다.
+
 지속 실행과 샘플 입력:
 
 ```sh
@@ -127,7 +151,9 @@ bun run source:run -- bun test packages/core/src/index.test.ts
 - `packages/host/src/runtime.ts`: 호스트 시작·종료, 시작 중 취소와 실패 시 자원 회수. `main.ts`는 프로세스 신호와 종료 코드만 연결합니다.
 - `packages/host/src/config.ts`: 설정 생성·검증·원자적 갱신. CLI 등록과 호스트 실행이 공유합니다.
 - `packages/streamdeck`: 논리 배치, 입력 의도, 렌더링과 HID 수명 관리.
-- [v4 설계](docs/design/local-signal-bus-v4.md), [이번 구현 범위](docs/design/bun-implementation-plan.md).
+- `packages/release/launch-agent.ts`, `daemon.ts`: Runtime 전용 LaunchAgent 정의·소유권 검증·로그·주입 runner 기반 서비스 제어.
+- `packages/release/install.ts`: marked payload transaction과 Runtime 서비스의 update/rollback/uninstall 순서.
+- [v4 설계](docs/design/local-signal-bus-v4.md), [이번 구현 범위](docs/design/bun-implementation-plan.md), [Runtime LaunchAgent 설계](docs/superpowers/specs/2026-09-14-runtime-launchagent-design.md), [Runtime LaunchAgent 계획](docs/superpowers/plans/2026-09-14-runtime-launchagent.md).
 
 사용한 Bun 인터페이스: [SQLite](https://bun.sh/docs/runtime/sqlite), [HTTP server](https://bun.sh/docs/runtime/http/server), [test runner](https://bun.sh/docs/test).
 
