@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {cpSync,existsSync,lstatSync,mkdirSync,mkdtempSync,readdirSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs';
+import {closeSync,cpSync,existsSync,lstatSync,mkdirSync,mkdtempSync,openSync,readdirSync,readFileSync,readSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename,dirname,extname,join,relative,resolve} from 'node:path';
 import {createReleaseManifest,validateReleaseManifest} from '../packages/release/manifest';
@@ -46,8 +46,16 @@ const prune=(root:string)=>{
   visit(root);
 };
 
+function hasShebang(path:string):boolean{
+  const descriptor=openSync(path,'r'),header=Buffer.alloc(2);
+  try{return readSync(descriptor,header,0,header.length,0)===header.length&&header[0]===35&&header[1]===33;}finally{closeSync(descriptor);}
+}
+
 function buildMachinePath(root:string):string|undefined{
-  return relativeFiles(root).find(path=>!(path.split('/').includes('node_modules')&&extname(path).toLowerCase()==='.md')&&textExtensions.has(extname(path).toLowerCase())&&readFileSync(join(root,path),'utf8').includes('/Users/'));
+  return relativeFiles(root).find(path=>{
+    const extension=extname(path).toLowerCase(),fullPath=join(root,path),vendoredDocumentation=path.split('/').includes('node_modules')&&extension==='.md';
+    return !vendoredDocumentation&&(textExtensions.has(extension)||(extension===''&&hasShebang(fullPath)))&&readFileSync(fullPath).includes('/Users/');
+  });
 }
 
 const writeChecksums=(root:string)=>{
