@@ -2,8 +2,9 @@ import {expect,test} from 'bun:test';
 import {chmodSync,copyFileSync,existsSync,mkdtempSync,mkdirSync,readFileSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
-import {createRuntimeDaemon,type CommandResult} from '../packages/release/daemon';
+import {createRuntimeDaemon,type CommandResult,type RuntimeDaemon} from '../packages/release/daemon';
 import {resolveInstallerPaths} from '../packages/release/install';
+import {launchAgentPaths,renderLaunchAgent} from '../packages/release/launch-agent';
 import {createReleaseManifest} from '../packages/release/manifest';
 import {packageVersion} from '../packages/release/version';
 import {runPreviewInstaller} from './preview-install';
@@ -60,6 +61,32 @@ test('a missing expected plist performs no daemon operation during a fresh insta
   try{
     await runPreviewInstaller({argv:['install','--prefix',prefix],packageRoot,home,daemonFor:root=>createRuntimeDaemon({home,uid:501,bunPath:'/bin/bun',packageRoot:root,runner}),write:()=>{}});
     expect(commands).toEqual([]);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('enabled update does not publish or re-enable while old runtime disable is still waiting for physical exit',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'streamhub-update-wait-')),home=join(root,'home'),source=join(root,'package'),installedRoot=join(home,'Library','Application Support','Streamhub','app',packageVersion),commandPath=join(home,'.local','bin','streamhub'),events:string[]=[];
+  let releaseDisable:(()=>void)|undefined,enteredDisable:(()=>void)|undefined;
+  const disabled=new Promise<void>(resolve=>{releaseDisable=resolve;}),entered=new Promise<void>(resolve=>{enteredDisable=resolve;});
+  try{
+    packageFixture(source);writeFileSync(join(source,'manifest.json'),JSON.stringify(createReleaseManifest({gitCommit:'b'.repeat(40),builtAt:'2026-09-11T00:00:00.000Z',pluginVersion:'0.2.0.0'})));
+    packageFixture(installedRoot);writeFileSync(join(installedRoot,'.streamhub-preview-install.json'),JSON.stringify({name:'streamhub-preview',version:packageVersion,gitCommit:'a'.repeat(40)}));mkdirSync(dirname(commandPath),{recursive:true});symlinkSync(join(installedRoot,'bin','streamhub'),commandPath);
+    const input={home,uid:501,bunPath:'/bin/bun',packageRoot:installedRoot},paths=launchAgentPaths(input);mkdirSync(dirname(paths.plistPath),{recursive:true});writeFileSync(paths.plistPath,renderLaunchAgent(input));
+    const daemon:RuntimeDaemon={
+      paths,
+      status:async()=>({enabled:true,loaded:true,running:true,pid:123}),
+      disable:async()=>{events.push('disable-old');enteredDisable?.();await disabled;events.push('old-exited');return{enabled:false,loaded:false,running:false};},
+      enable:async()=>{events.push('enable-new');return{enabled:true,loaded:true,running:true,pid:456};},
+      restart:async()=>({enabled:true,loaded:true,running:true,pid:456}),
+    };
+    const installing=runPreviewInstaller({argv:['install'],packageRoot:source,home,commandPath,daemonFor:()=>daemon,write:()=>{}});
+    await entered;
+    expect(events).toEqual(['disable-old']);
+    expect(JSON.parse(readFileSync(join(installedRoot,'manifest.json'),'utf8')).gitCommit).toBe('a'.repeat(40));
+    releaseDisable?.();
+    await installing;
+    expect(events).toEqual(['disable-old','old-exited','enable-new']);
+    expect(JSON.parse(readFileSync(join(installedRoot,'manifest.json'),'utf8')).gitCommit).toBe('b'.repeat(40));
   }finally{rmSync(root,{recursive:true,force:true});}
 });
 

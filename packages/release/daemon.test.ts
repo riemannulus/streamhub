@@ -10,14 +10,14 @@ type Existing='owned'|'foreign'|'symlink';
 type Fixture={
   input:LaunchAgentInput;
   paths:ReturnType<typeof launchAgentPaths>;
-  recorded:{commands:string[][];loaded:boolean;running:boolean;definition?:string;failBootstrap:number;failBootout:boolean};
+  recorded:{commands:string[][];loaded:boolean;running:boolean;definition?:string;failBootstrap:number;failBootout:boolean;sleeps:number[];plistPresentDuringPidWait?:boolean;bootstrapBeforePriorPidExit:boolean};
   daemon:ReturnType<typeof createRuntimeDaemon>;
   cleanup():Promise<void>;
 };
 
 const missingService='Could not find service "com.streamhub.runtime" in domain for system';
 
-async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number}={}):Promise<Fixture>{
+async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running?:boolean;input?:Partial<LaunchAgentInput>;failBootstrap?:number;failBootout?:boolean;failPrintOn?:number;delayedUnloadPolls?:number;delayedPidExitPolls?:number;bootoutTimeoutMs?:number}={}):Promise<Fixture>{
   const directory=await mkdtemp(join(tmpdir(),'streamhub-daemon-'));
   const input:LaunchAgentInput={
     home:join(directory,'home'),
@@ -36,26 +36,30 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
     await writeFile(target,renderLaunchAgent(input));
     await symlink(target,paths.plistPath);
   }
-  const recorded={
+  const recorded:Fixture['recorded']={
     commands:[] as string[][],
     loaded:options.loaded??false,
     running:options.running??false,
     definition:options.loaded&&options.existing==='owned'?renderLaunchAgent(input):undefined,
     failBootstrap:options.failBootstrap??0,
     failBootout:options.failBootout??false,
+    sleeps:[],
+    bootstrapBeforePriorPidExit:false,
   };
-  let printCount=0;
+  let printCount=0,now=0,bootoutRequested=false,unloadPollsRemaining=options.delayedUnloadPolls??0,pidExitPollsRemaining=options.delayedPidExitPolls??0,priorPidExited=!(recorded.loaded&&recorded.running);
   const runner=async(argv:readonly string[]):Promise<CommandResult>=>{
     recorded.commands.push([...argv]);
     if(argv[0]==='/usr/bin/plutil') return {code:0,stdout:'',stderr:''};
     if(argv[1]==='print'){
       printCount++;
       if(printCount===options.failPrintOn) return {code:1,stdout:'token=private',stderr:'path=/private/secret'};
+      if(bootoutRequested&&recorded.loaded&&unloadPollsRemaining--<=0){recorded.loaded=false;recorded.running=false;recorded.definition=undefined;}
       return recorded.loaded
         ? {code:0,stdout:`state = ${recorded.running?'running':'exited'}\npid = ${recorded.running?'123':'0'}\nlast exit code = 7`,stderr:''}
         : {code:113,stdout:'',stderr:missingService};
     }
     if(argv[1]==='bootstrap'){
+      if(!priorPidExited) recorded.bootstrapBeforePriorPidExit=true;
       if(recorded.loaded) return {code:1,stdout:'private conflict',stderr:'same-label service already loaded'};
       if(recorded.failBootstrap>0){
         recorded.failBootstrap--;
@@ -68,9 +72,8 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
     }
     if(argv[1]==='bootout'){
       if(recorded.failBootout) return {code:1,stdout:'private output',stderr:'private failure'};
-      recorded.loaded=false;
-      recorded.running=false;
-      recorded.definition=undefined;
+      bootoutRequested=true;
+      if(unloadPollsRemaining<=0){recorded.loaded=false;recorded.running=false;recorded.definition=undefined;}
       return {code:0,stdout:'',stderr:''};
     }
     if(argv[1]==='kickstart'){
@@ -81,7 +84,13 @@ async function daemonFixture(options:{existing?:Existing;loaded?:boolean;running
   };
   return {
     input,paths,recorded,
-    daemon:createRuntimeDaemon({...input,runner}),
+    daemon:createRuntimeDaemon({...input,runner,bootoutTimeoutMs:options.bootoutTimeoutMs,now:()=>now,sleep:async milliseconds=>{recorded.sleeps.push(milliseconds);now+=milliseconds;},isPidRunning:async()=>{
+      try{await lstat(paths.plistPath);recorded.plistPresentDuringPidWait=true;}catch{recorded.plistPresentDuringPidWait=false;}
+      if(recorded.loaded)return true;
+      if(pidExitPollsRemaining-- > 0)return true;
+      priorPidExited=true;
+      return false;
+    }}),
     cleanup:()=>rm(directory,{recursive:true,force:true}),
   };
 }
@@ -129,8 +138,56 @@ test('disable and restart operate only on an owned loaded definition',async()=>{
     expect(h.recorded.commands).toEqual([
       ['/bin/launchctl','print',h.paths.service],
       ['/bin/launchctl','bootout',h.paths.service],
+      ['/bin/launchctl','print',h.paths.service],
     ]);
     await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
+test('disable waits for the unloaded service and prior PID before deleting its plist or reporting success',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,delayedPidExitPolls:1});
+  try{
+    expect(await h.daemon.disable()).toEqual({enabled:false,loaded:false,running:false});
+    expect(h.recorded.sleeps).toEqual([50,50]);
+    expect(h.recorded.plistPresentDuringPidWait).toBe(true);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','print']);
+    await expect(lstat(h.paths.plistPath)).rejects.toThrow();
+  }finally{await h.cleanup();}
+});
+
+test('replacement enable waits for old unload and PID exit before publishing or bootstrapping',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:1,delayedPidExitPolls:1});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  try{
+    await writeFile(h.paths.plistPath,renderLaunchAgent(oldInput));
+    await h.daemon.enable();
+    expect(h.recorded.sleeps).toEqual([50,50]);
+    expect(h.recorded.bootstrapBeforePriorPidExit).toBe(false);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','print','-lint','bootstrap','print']);
+  }finally{await h.cleanup();}
+});
+
+test('bootout timeout is bounded, sanitized, and preserves the owned plist',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:99,bootoutTimeoutMs:100});
+  try{
+    const error=await h.daemon.disable().then(()=>undefined,value=>value as Error);
+    expect(error?.message).toBe('Unable to disable Streamhub runtime service');
+    expect(error?.message).not.toContain('private');
+    expect(error?.message).not.toContain(h.input.home);
+    expect(h.recorded.sleeps).toEqual([50,50]);
+    await expect(lstat(h.paths.plistPath)).resolves.toBeDefined();
+  }finally{await h.cleanup();}
+});
+
+test('replacement timeout preserves the old plist and never validates or bootstraps a new one',async()=>{
+  const h=await daemonFixture({existing:'owned',loaded:true,running:true,delayedUnloadPolls:99,bootoutTimeoutMs:100});
+  const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
+  const previous=renderLaunchAgent(oldInput);
+  try{
+    await writeFile(h.paths.plistPath,previous);
+    await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
+    expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','print','print']);
   }finally{await h.cleanup();}
 });
 
@@ -153,12 +210,12 @@ test('failed replacement bootstrap restores prior bytes and its loaded job',asyn
     await expect(h.daemon.enable()).rejects.toThrow('Unable to enable Streamhub runtime service');
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
     expect(h.recorded.loaded).toBe(true);
-    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','bootstrap']);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap','bootstrap']);
   }finally{await h.cleanup();}
 });
 
 test('failed post-bootstrap status verification restores prior bytes and loaded state',async()=>{
-  const h=await daemonFixture({loaded:true,running:true,failPrintOn:2});
+  const h=await daemonFixture({loaded:true,running:true,failPrintOn:3});
   const oldInput={...h.input,packageRoot:h.input.packageRoot.replace('/1.0.0','/0.9.0')};
   const previous=renderLaunchAgent(oldInput);
   try{
@@ -168,7 +225,7 @@ test('failed post-bootstrap status verification restores prior bytes and loaded 
     expect(await readFile(h.paths.plistPath,'utf8')).toBe(previous);
     expect(h.recorded.loaded).toBe(true);
     expect(h.recorded.definition).toBe(previous);
-    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','-lint','bootstrap','print','bootout','bootstrap']);
+    expect(h.recorded.commands.map(command=>command[1])).toEqual(['print','bootout','print','-lint','bootstrap','print','print','bootout','print','bootstrap']);
   }finally{await h.cleanup();}
 });
 

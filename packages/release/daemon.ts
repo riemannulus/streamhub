@@ -6,7 +6,13 @@ import {isManagedLaunchAgentPaths,launchAgentPaths,parseLaunchctlPrint,renderLau
 export type CommandResult={code:number;stdout:string;stderr:string};
 export type CommandRunner=(argv:readonly string[])=>Promise<CommandResult>;
 export type DaemonStatus={enabled:boolean;loaded:boolean;running:boolean;pid?:number;lastExitStatus?:number};
-export type DaemonOptions=LaunchAgentInput&{runner?:CommandRunner};
+export type DaemonOptions=LaunchAgentInput&{
+  runner?:CommandRunner;
+  now?:()=>number;
+  sleep?:(milliseconds:number)=>Promise<void>;
+  isPidRunning?:(pid:number)=>Promise<boolean>;
+  bootoutTimeoutMs?:number;
+};
 export type RuntimeDaemon={
   enable():Promise<DaemonStatus>;
   disable():Promise<DaemonStatus>;
@@ -19,6 +25,9 @@ const launchctl='/bin/launchctl';
 const plutil='/usr/bin/plutil';
 const maxLogBytes=64*1024;
 const rolloverBytes=5*1024*1024;
+const bootoutPollMs=50;
+const defaultBootoutTimeoutMs=2_000;
+const maxBootoutTimeoutMs=5_000;
 
 class PublicBoundaryError extends Error{
   constructor(message:string,readonly decision=false){super(message);}
@@ -196,6 +205,14 @@ async function defaultRunner(argv:readonly string[]):Promise<CommandResult>{
   return {code,stdout,stderr};
 }
 
+async function defaultPidRunning(pid:number):Promise<boolean>{
+  try{process.kill(pid,0);return true;}
+  catch(error){
+    if(typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:string}).code==='ESRCH')return false;
+    throw error;
+  }
+}
+
 async function readDefinition(paths:LaunchAgentPaths,input:LaunchAgentInput):Promise<{exists:boolean;bytes?:string}>{
   try{
     const info=await lstat(paths.plistPath);
@@ -241,6 +258,12 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
   const input:LaunchAgentInput={home:options.home,uid:options.uid,bunPath:options.bunPath,packageRoot:options.packageRoot};
   const paths=launchAgentPaths(input);
   const runner=options.runner??defaultRunner;
+  const now=options.now??Date.now;
+  const sleep=options.sleep??(milliseconds=>Bun.sleep(milliseconds));
+  const isPidRunning=options.isPidRunning??defaultPidRunning;
+  const bootoutTimeoutMs=Number.isSafeInteger(options.bootoutTimeoutMs)&&options.bootoutTimeoutMs!>0
+    ?Math.min(options.bootoutTimeoutMs!,maxBootoutTimeoutMs)
+    :defaultBootoutTimeoutMs;
 
   async function inspect(){
     const result=await runner([launchctl,'print',paths.service]);
@@ -257,10 +280,22 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
     return {enabled:definition.exists,loaded:current.loaded,running:current.running,...(current.pid===undefined?{}:{pid:current.pid}),...(current.lastExitStatus===undefined?{}:{lastExitStatus:current.lastExitStatus})};
   }
 
+  async function bootoutAndWait(current:ReturnType<typeof parseLaunchctlPrint>):Promise<void>{
+    const bootout=await runner([launchctl,'bootout',paths.service]);
+    if(bootout.code!==0) throw publicError('disable');
+    const deadline=now()+bootoutTimeoutMs;
+    while(true){
+      const observed=await inspect();
+      if(!observed.loaded&&(current.pid===undefined||!await isPidRunning(current.pid)))return;
+      const remaining=deadline-now();
+      if(remaining<=0) throw publicError('wait for disable');
+      await sleep(Math.min(bootoutPollMs,remaining));
+    }
+  }
+
   async function restore(previous:{exists:boolean;bytes?:string},wasLoaded:boolean,newlyLoaded:boolean):Promise<void>{
     if(newlyLoaded){
-      const bootout=await runner([launchctl,'bootout',paths.service]);
-      if(bootout.code!==0) throw publicError('restore');
+      await bootoutAndWait(await inspect());
     }
     try{
       if(previous.exists&&previous.bytes!==undefined) await writeMode0600(paths.plistPath,previous.bytes);
@@ -291,8 +326,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
       if(initial.loaded&&!changed) return {enabled:true,loaded:true,running:initial.running,...(initial.pid===undefined?{}:{pid:initial.pid}),...(initial.lastExitStatus===undefined?{}:{lastExitStatus:initial.lastExitStatus})};
       rollRuntimeLog(paths);
       if(initial.loaded){
-        const bootout=await runner([launchctl,'bootout',paths.service]);
-        if(bootout.code!==0) throw publicError('disable');
+        await bootoutAndWait(initial);
       }
       let newlyLoaded=false;
       try{
@@ -314,8 +348,7 @@ export function createRuntimeDaemon(options:DaemonOptions):RuntimeDaemon{
         return {enabled:false,loaded:false,running:false};
       }
       if(current.loaded){
-        const bootout=await runner([launchctl,'bootout',paths.service]);
-        if(bootout.code!==0) throw publicError('disable');
+        await bootoutAndWait(current);
       }
       await unlink(paths.plistPath);
       return {enabled:false,loaded:false,running:false};
