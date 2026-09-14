@@ -47,7 +47,7 @@ const prune=(root:string)=>{
 };
 
 function buildMachinePath(root:string):string|undefined{
-  return relativeFiles(root).find(path=>!path.split('/').includes('node_modules')&&textExtensions.has(extname(path).toLowerCase())&&readFileSync(join(root,path),'utf8').includes('/Users/'));
+  return relativeFiles(root).find(path=>!(path.split('/').includes('node_modules')&&extname(path).toLowerCase()==='.md')&&textExtensions.has(extname(path).toLowerCase())&&readFileSync(join(root,path),'utf8').includes('/Users/'));
 }
 
 const writeChecksums=(root:string)=>{
