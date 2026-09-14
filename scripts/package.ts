@@ -19,6 +19,7 @@ export type PackageResult={root:string;archive:string;archiveSha256:string;versi
 
 const packageDirectory=`streamhub-${packageVersion}-${releaseTarget}`;
 const forbidden=/(^|\/)(\.streamhub|\.git|logs|tests?|__tests__)(\/|$)|\.test\.|\.map$/;
+const runtimeSourceDirectories=['actions','core','host','presentation','streamdeck','studio'] as const;
 const checksum=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex');
 const copy=(source:string,target:string)=>{mkdirSync(dirname(target),{recursive:true});cpSync(source,target,{recursive:true,preserveTimestamps:true});};
 const run=async(command:string[],cwd:string)=>{const child=Bun.spawn(command,{cwd,stdout:'pipe',stderr:'pipe',env:process.env});const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);if(code!==0)throw new Error(`Package command failed: ${command.slice(0,3).join(' ')}\n${stderr||stdout}`);};
@@ -50,11 +51,15 @@ export function verifyChecksums(root:string):{valid:boolean;missing:string[];ext
 const buildOne=async(source:string,target:string,targetKind:'bun'|'browser')=>{mkdirSync(dirname(target),{recursive:true});const result=await Bun.build({entrypoints:[source],outdir:dirname(target),naming:basename(target),target:targetKind,packages:targetKind==='bun'?'external':undefined,minify:false,sourcemap:'none'});if(!result.success)throw new Error(`Build failed: ${result.logs.map(String).join('\n')}`);};
 
 export async function buildPreviewApplications({repositoryRoot,packageRoot}:BuildContext){
-  await buildOne(join(repositoryRoot,'packages/host/src/main.ts'),join(packageRoot,'app/runtime.js'),'bun');
   await buildOne(join(repositoryRoot,'scripts/preview-cli.ts'),join(packageRoot,'app/cli.js'),'bun');
   await buildOne(join(repositoryRoot,'scripts/packaged-studio.ts'),join(packageRoot,'app/studio.js'),'bun');
   await buildOne(join(repositoryRoot,'scripts/preview-install.ts'),join(packageRoot,'app/install.js'),'bun');
   await buildOne(join(repositoryRoot,'packages/editor/web/app.ts'),join(packageRoot,'share/studio/app.js'),'browser');
+}
+
+export function copyRuntimeSources({repositoryRoot,packageRoot}:BuildContext){
+  copy(join(repositoryRoot,'packaging/runtime.ts'),join(packageRoot,'app/runtime.ts'));
+  for(const directory of runtimeSourceDirectories)copy(join(repositoryRoot,'packages',directory),join(packageRoot,'app/packages',directory));
 }
 
 const defaultPreparePlugin=async({repositoryRoot}:{repositoryRoot:string})=>run([process.execPath,'run','streamdeck:plugin:check'],repositoryRoot);
@@ -71,7 +76,8 @@ export async function assemblePreview(options:PackageOptions={}):Promise<Package
     await (options.preparePlugin??defaultPreparePlugin)({repositoryRoot});
     mkdirSync(stagedRoot,{recursive:true});
     await (options.buildApplications??buildPreviewApplications)({repositoryRoot,packageRoot:stagedRoot});
-    for(const [source,target] of [['README.md','README.md'],['DEVELOPMENT.md','DEVELOPMENT.md'],['packaging/install.sh','install.sh'],['packaging/uninstall.sh','uninstall.sh'],['packaging/bin/streamhub','bin/streamhub'],['packages/host/native/session-monitor.swift','app/native/session-monitor.swift']] as const)copy(join(repositoryRoot,source),join(stagedRoot,target));
+    copyRuntimeSources({repositoryRoot,packageRoot:stagedRoot});
+    for(const [source,target] of [['README.md','README.md'],['DEVELOPMENT.md','DEVELOPMENT.md'],['packaging/install.sh','install.sh'],['packaging/uninstall.sh','uninstall.sh'],['packaging/bin/streamhub','bin/streamhub']] as const)copy(join(repositoryRoot,source),join(stagedRoot,target));
     for(const file of ['index.html','style.css','icon-library.css','display-settings.css'])copy(join(repositoryRoot,'packages/editor/web',file),join(stagedRoot,'share/studio',file));
     const pluginSource=join(repositoryRoot,'packages/streamdeck-plugin/com.streamhub.studio.sdPlugin'),pluginTarget=join(stagedRoot,'share/streamdeck-plugin/com.streamhub.studio.sdPlugin');copy(pluginSource,pluginTarget);
     const pluginManifest=JSON.parse(readFileSync(join(pluginTarget,'manifest.json'),'utf8')) as {Version?:unknown};
