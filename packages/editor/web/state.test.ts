@@ -87,3 +87,12 @@ test('display mode save updates device state without saving or dirtying the docu
   expect(state.display).toEqual({configuredMode:'hid',activeMode:'plugin',state:'ready',restartRequired:true});expect(state.model.dirty).toBe(false);expect(calls.filter(call=>call.url==='/api/draft')).toHaveLength(0);
   expect(calls.find(call=>call.url==='/api/display-mode')?.init?.body).toBe(JSON.stringify({mode:'hid',expectedVersion:'config-v1'}));
 });
+
+test('bootstrap pipeline documents are validated after their credential-free catalog loads',async()=>{
+  const document=defaultStudioDocument();document.pages[0].buttons=[{id:'stg',index:0,behavior:singlePressBehavior({type:'github-pipeline',pipelineId:'crepe-backend-stg',role:'deployment'}),appearance:{contentMode:'label-only',label:{text:'Stg 배포',position:'center',size:'medium',color:'#ffffff'}}}];
+  const request=async(input:string|URL|Request)=>{const url=String(input);if(url==='/api/bootstrap')return Response.json({token:'t',snapshot:{document,version:'v1'},geometry:{x:[11,108,205,302,399],y:[5,102,199]}});if(url==='/api/catalog/github-pipelines')return Response.json([{id:'crepe-backend-stg',label:'Crepe Backend Stg',roles:['trigger','deployment']}]);if(url.includes('/api/catalog/'))return Response.json([]);return Response.json({error:'Not found'},{status:404});};
+  const state=await StudioState.connect(request as typeof fetch);
+  expect(state.pipelines).toEqual([{id:'crepe-backend-stg',label:'Crepe Backend Stg',roles:['trigger','deployment']}]);
+  expect(state.model.document.pages[0].buttons?.[0]?.behavior.press).toMatchObject({action:{type:'github-pipeline',pipelineId:'crepe-backend-stg'}});
+  state.model.setSurfaceColor('page','#112233');expect(state.model.document.pages[0].appearance?.color).toBe('#112233');
+});

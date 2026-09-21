@@ -1,5 +1,6 @@
 import type {AppCatalogItem,PathPickerResult} from '../../host/src/catalog';
 import type {StudioDocument} from '../../studio/document';
+import type {StudioValidationContext} from '../../studio/document';
 import {StudioModel} from './model';
 import type {IconPackIcon,IconPackSummary} from '../icon-packs';
 import type {DisplayMode} from '../../host/src/config';
@@ -21,14 +22,13 @@ export class StudioState{
   private configVersion:string;
   private draftQueue:Promise<void>=Promise.resolve();
   private readonly request:typeof fetch;
-  private constructor(request:typeof fetch,private readonly token:string,private version:string,readonly geometry:Geometry,bootstrap:Bootstrap){this.request=request.bind(globalThis);this.model=new StudioModel(bootstrap.draft??bootstrap.snapshot.document);this.configVersion=bootstrap.configVersion??'';this.display=bootstrap.display??bootstrap.runtimeStatus??offDisplay;this.runtimeStatus=this.display;}
+  private constructor(request:typeof fetch,private readonly token:string,private version:string,readonly geometry:Geometry,bootstrap:Bootstrap,context:StudioValidationContext){this.request=request.bind(globalThis);this.model=new StudioModel(bootstrap.draft??bootstrap.snapshot.document,context);this.configVersion=bootstrap.configVersion??'';this.display=bootstrap.display??bootstrap.runtimeStatus??offDisplay;this.runtimeStatus=this.display;}
   static async connect(request:typeof fetch=fetch):Promise<StudioState>{
     const response=await request('/api/bootstrap');const bootstrap=await response.json() as Bootstrap;if(!response.ok)throw new Error('Studio를 불러오지 못했습니다.');
-    const state=new StudioState(request,bootstrap.token,bootstrap.snapshot.version,bootstrap.geometry,bootstrap);
     const headers={'X-Streamhub-Editor':bootstrap.token};
     const [apps,actions,pipelines]=await Promise.all([request('/api/catalog/apps',{headers}),request('/api/catalog/actions',{headers}),request('/api/catalog/github-pipelines',{headers})]);
-    if(apps.ok)state.apps=await apps.json() as AppCatalogItem[];if(actions.ok)state.actions=await actions.json() as RegisteredActionItem[];
-    if(pipelines.ok)state.pipelines=await pipelines.json() as GitHubPipelineCatalogItem[];
+    const appItems=apps.ok?await apps.json() as AppCatalogItem[]:[],actionItems=actions.ok?await actions.json() as RegisteredActionItem[]:[],pipelineItems=pipelines.ok?await pipelines.json() as GitHubPipelineCatalogItem[]:[],context:StudioValidationContext={actions:Object.fromEntries(actionItems.map(item=>[item.name,{args:Object.fromEntries(item.args.map(key=>[key,{}]))}])),pipelines:pipelineItems.map(({id})=>({id}))};
+    const state=new StudioState(request,bootstrap.token,bootstrap.snapshot.version,bootstrap.geometry,bootstrap,context);state.apps=appItems;state.actions=actionItems;state.pipelines=pipelineItems;
     return state;
   }
   changed():void{this.draftQueue=this.draftQueue.then(()=>this.saveDraft()).catch(()=>{});}

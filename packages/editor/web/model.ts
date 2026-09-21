@@ -1,4 +1,4 @@
-import {validateKeyBehavior,validateStudioDocument,type ButtonDefinition,type KeyBehavior,type StudioDocument,type TransitionSpec} from '../../studio/document';
+import {validateKeyBehavior,validateStudioDocument,type ButtonDefinition,type KeyBehavior,type StudioDocument,type StudioValidationContext,type TransitionSpec} from '../../studio/document';
 import * as editing from '../editing';
 import * as buttonEditing from './clipboard';
 
@@ -10,9 +10,9 @@ export class StudioModel{
   document:StudioDocument;
   selectedPageId:string;
   selectedKey=0;
-  constructor(document:StudioDocument){this.document=validateStudioDocument(document);this.selectedPageId=this.document.defaultPageId;this.applied=JSON.stringify(this.document);}
+  constructor(document:StudioDocument,private readonly context:StudioValidationContext={}){this.document=validateStudioDocument(document,context);this.selectedPageId=this.document.defaultPageId;this.applied=JSON.stringify(this.document);}
   get dirty(){return JSON.stringify(this.document)!==this.applied;}
-  private replace(next:StudioDocument){const validated=validateStudioDocument(next);if(JSON.stringify(validated)===JSON.stringify(this.document))return false;this.past.push({document:structuredClone(this.document),selectedPageId:this.selectedPageId,selectedKey:this.selectedKey});if(this.past.length>100)this.past.shift();this.future=[];this.document=validated;return true;}
+  private replace(next:StudioDocument){const validated=validateStudioDocument(next,this.context);if(JSON.stringify(validated)===JSON.stringify(this.document))return false;this.past.push({document:structuredClone(this.document),selectedPageId:this.selectedPageId,selectedKey:this.selectedKey});if(this.past.length>100)this.past.shift();this.future=[];this.document=validated;return true;}
   private change(mutator:(draft:StudioDocument)=>void){const draft=structuredClone(this.document);mutator(draft);this.replace(draft);}
   selectPage(id:string){if(this.document.pages.some(page=>page.id===id))this.selectedPageId=id;}
   selectKey(index:number){if(Number.isInteger(index)&&index>=0&&index<15)this.selectedKey=index;}
@@ -25,7 +25,7 @@ export class StudioModel{
   setBackground(target:'page'|'standby',assetId:string,fit:'cover'|'contain'|'stretch'='cover'){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.background={assetId,fit};});}
   setSurfaceColor(target:'page'|'standby',color:string){this.change(document=>{const appearance=target==='standby'?document.standby:(document.pages.find(page=>page.id===this.selectedPageId)!.appearance??={});appearance.color=color;});}
   setButton(button:ButtonDefinition){this.change(document=>{const page=document.pages.find(page=>page.id===this.selectedPageId)!;page.buttons=[...(page.buttons??[]).filter(item=>item.index!==button.index),button];});}
-  setSelectedButtonBehavior(behavior:KeyBehavior){this.change(document=>{const button=document.pages.find(page=>page.id===this.selectedPageId)?.buttons?.find(button=>button.index===this.selectedKey);if(!button)throw new Error('선택한 버튼이 없습니다.');button.behavior=validateKeyBehavior(behavior);});}
+  setSelectedButtonBehavior(behavior:KeyBehavior){this.change(document=>{const button=document.pages.find(page=>page.id===this.selectedPageId)?.buttons?.find(button=>button.index===this.selectedKey);if(!button)throw new Error('선택한 버튼이 없습니다.');button.behavior=validateKeyBehavior(behavior,this.context);});}
   copyButton(){this.clipboard=buttonEditing.copyButton(this.document,this.selectedPageId,this.selectedKey);}
   pasteButton(){if(!this.clipboard)throw new Error('복사한 버튼이 없습니다.');return this.replace(buttonEditing.pasteButton(this.document,this.selectedPageId,this.selectedKey,this.clipboard));}
   duplicateButton(targetIndex?:number){const page=this.document.pages.find(page=>page.id===this.selectedPageId)!,target=targetIndex??Array.from({length:15},(_,index)=>index).find(index=>!page.buttons?.some(button=>button.index===index));if(target===undefined)throw new Error('빈 키가 없습니다.');const changed=this.replace(buttonEditing.duplicateButton(this.document,this.selectedPageId,this.selectedKey,target));this.selectedKey=target;return changed;}
