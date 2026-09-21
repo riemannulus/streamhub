@@ -72,7 +72,7 @@ fake GitHub gateway, 실제 pipeline 상태 모듈, SQLite persistence seam, Pre
 
 ```text
 focused GitHub/Presentation/package suites: 65 pass, 0 fail
-repository check: 443 pass, 0 fail
+repository check: 444 pass, 0 fail
 Stream Deck plugin check: 8 pass, 0 fail
 TypeScript and git diff whitespace checks: pass
 ```

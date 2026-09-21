@@ -30,6 +30,12 @@ test('viewer and workflow runs are strictly projected from REST responses',async
   expect(calls[1]!.argv).toEqual(['/opt/homebrew/bin/gh','api','repos/cookieplace/crepe/actions/workflows/release-backend.yaml/runs?per_page=30']);
 });
 
+test('workflow runs accept GitHub App bot actors without relaxing ordinary login parsing',async()=>{
+  const bot={...run,actor:{login:'crepe-github-app[bot]'}};
+  const {gateway}=harness([result({workflow_runs:[bot],total_count:1})]);
+  expect((await gateway.listRuns('cookieplace/crepe','release-backend.yaml'))[0]?.actor).toBe('crepe-github-app[bot]');
+});
+
 test('run details combine exact run and jobs endpoints',async()=>{
   const {gateway,calls}=harness([result(run),result({total_count:1,jobs:[job]})]);
   expect(await gateway.getRun('cookieplace/crepe',42)).toMatchObject({id:42,jobs:[{id:7,name:'deploy-backend',conclusion:'failure',steps:[{name:'Deploy to EB',conclusion:'failure'}]}]});

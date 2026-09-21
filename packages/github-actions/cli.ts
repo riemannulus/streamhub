@@ -29,7 +29,7 @@ function parseJson(stdout:string):unknown{try{return JSON.parse(stdout);}catch{t
 function parseRun(raw:unknown,repository:string):GitHubWorkflowRun{
   if(!record(raw)||!record(raw.actor))throw invalid();
   const headSha=text(raw.head_sha,64);if(!/^[a-f0-9]{40}$/i.test(headSha))throw invalid();
-  const actor=text(raw.actor.login,64);if(!/^[A-Za-z0-9-]+$/.test(actor))throw invalid();
+  const actor=text(raw.actor.login,64);if(!/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(actor))throw invalid();
   return{id:integer(raw.id),workflowId:integer(raw.workflow_id),url:runUrl(raw.html_url,repository),event:text(raw.event,64),headBranch:text(raw.head_branch,255),headSha:headSha.toLowerCase(),status:status(raw.status),conclusion:conclusion(raw.conclusion),createdAt:timestamp(raw.created_at),updatedAt:timestamp(raw.updated_at),actor};
 }
 function parseStep(raw:unknown):GitHubStep{
