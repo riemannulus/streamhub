@@ -1,8 +1,8 @@
-import {actionsInBehavior,validateStudioDocument,type ButtonAction,type StudioDocument,type StudioPage} from '../studio/document';
+import {actionsInBehavior,validateStudioDocument,type ButtonAction,type StudioDocument,type StudioPage,type StudioValidationContext} from '../studio/document';
 
 export type PageReference={pageId:string;buttonId:string};
 
-function clone(input:StudioDocument):StudioDocument{return validateStudioDocument(input);}
+function clone(input:StudioDocument,context:StudioValidationContext):StudioDocument{return validateStudioDocument(input,context);}
 function page(document:StudioDocument,pageId:string):StudioPage{
   const result=document.pages.find(item=>item.id===pageId);
   if(!result)throw new Error(`Unknown page: ${pageId}`);
@@ -26,23 +26,23 @@ function titleForCopy(document:StudioDocument,title:string):string{
 }
 function rewritePage(action:ButtonAction,from:string,to:string):void{if(action.type==='go-to-page'&&action.pageId===from)action.pageId=to;}
 
-export function addPage(input:StudioDocument):StudioDocument{
-  const document=clone(input);
+export function addPage(input:StudioDocument,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context);
   if(document.pages.length>=32)throw new Error('Studio supports at most 32 pages');
   const used=new Set(document.pages.map(item=>item.id));
   let number=document.pages.length+1;
   while(used.has(`page-${number}`))number++;
   document.pages.push({id:`page-${number}`,title:`페이지 ${number}`});
-  return validateStudioDocument(document);
+  return validateStudioDocument(document,context);
 }
 
-export function renamePage(input:StudioDocument,pageId:string,title:string):StudioDocument{
-  const document=clone(input);page(document,pageId).title=title;
-  return validateStudioDocument(document);
+export function renamePage(input:StudioDocument,pageId:string,title:string,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context);page(document,pageId).title=title;
+  return validateStudioDocument(document,context);
 }
 
-export function duplicatePage(input:StudioDocument,pageId:string):StudioDocument{
-  const document=clone(input);
+export function duplicatePage(input:StudioDocument,pageId:string,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context);
   if(document.pages.length>=32)throw new Error('Studio supports at most 32 pages');
   const original=page(document,pageId),pageIds=new Set(document.pages.map(item=>item.id));
   const copy=structuredClone(original),copyId=uniqueId(pageIds,`${original.id.slice(0,59)}-copy`);
@@ -53,32 +53,32 @@ export function duplicatePage(input:StudioDocument,pageId:string):StudioDocument
     for(const action of actionsInBehavior(button.behavior))rewritePage(action,original.id,copyId);
   }
   document.pages.push(copy);
-  return validateStudioDocument(document);
+  return validateStudioDocument(document,context);
 }
 
-export function movePage(input:StudioDocument,pageId:string,offset:-1|1):StudioDocument{
-  const document=clone(input),index=document.pages.findIndex(item=>item.id===pageId);
+export function movePage(input:StudioDocument,pageId:string,offset:-1|1,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context),index=document.pages.findIndex(item=>item.id===pageId);
   if(index<0)throw new Error(`Unknown page: ${pageId}`);
   if(offset!==-1&&offset!==1)throw new Error('Invalid page movement');
   const target=index+offset;
   if(target>=0&&target<document.pages.length)[document.pages[index],document.pages[target]]=[document.pages[target]!,document.pages[index]!];
-  return validateStudioDocument(document);
+  return validateStudioDocument(document,context);
 }
 
-export function setDefaultPage(input:StudioDocument,pageId:string):StudioDocument{
-  const document=clone(input);page(document,pageId);document.defaultPageId=pageId;
-  return validateStudioDocument(document);
+export function setDefaultPage(input:StudioDocument,pageId:string,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context);page(document,pageId);document.defaultPageId=pageId;
+  return validateStudioDocument(document,context);
 }
 
-export function pageReferences(input:StudioDocument,targetPageId:string):PageReference[]{
-  const document=clone(input);page(document,targetPageId);
+export function pageReferences(input:StudioDocument,targetPageId:string,context:StudioValidationContext={}):PageReference[]{
+  const document=clone(input,context);page(document,targetPageId);
   return document.pages.flatMap(item=>(item.buttons??[])
     .filter(button=>actionsInBehavior(button.behavior).some(action=>action.type==='go-to-page'&&action.pageId===targetPageId))
     .map(button=>({pageId:item.id,buttonId:button.id})));
 }
 
-export function deletePage(input:StudioDocument,pageId:string,replacementPageId?:string):StudioDocument{
-  const document=clone(input);page(document,pageId);
+export function deletePage(input:StudioDocument,pageId:string,replacementPageId?:string,context:StudioValidationContext={}):StudioDocument{
+  const document=clone(input,context);page(document,pageId);
   if(document.pages.length===1)throw new Error('Cannot delete the only page');
   const deletingDefault=document.defaultPageId===pageId;
   if(!deletingDefault&&replacementPageId!==undefined)throw new Error('A replacement is only accepted for the default page');
@@ -86,8 +86,8 @@ export function deletePage(input:StudioDocument,pageId:string,replacementPageId?
     if(replacementPageId===undefined)throw new Error('Deleting the default page requires a replacement');
     if(replacementPageId===pageId||!document.pages.some(item=>item.id===replacementPageId))throw new Error('Unknown replacement page');
   }
-  if(pageReferences(document,pageId).length)throw new Error('Cannot delete page: page is still referenced');
+  if(pageReferences(document,pageId,context).length)throw new Error('Cannot delete page: page is still referenced');
   document.pages=document.pages.filter(item=>item.id!==pageId);
   if(deletingDefault)document.defaultPageId=replacementPageId!;
-  return validateStudioDocument(document);
+  return validateStudioDocument(document,context);
 }

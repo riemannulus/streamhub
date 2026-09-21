@@ -32,3 +32,10 @@ test('button gestures create one undo entry, preserve selection and branch histo
   model.redo();expect(model.document.pages[1].buttons).toHaveLength(1);
   model.undo();model.selectPage('home');model.selectKey(0);model.duplicateButton(2);expect(model.document.pages[0].buttons).toHaveLength(2);model.undo();expect(model.document.pages[0].buttons).toHaveLength(1);model.redo();expect(model.document.pages[0].buttons).toHaveLength(2);
 });
+
+test('pipeline buttons can be cleared with their trusted validation context',()=>{
+  const document=defaultStudioDocument();document.pages[0].buttons=[{id:'stg',index:0,behavior:singlePressBehavior({type:'github-pipeline',pipelineId:'crepe-backend-stg',role:'deployment'}),appearance:{contentMode:'label-only',label:{text:'Stg 배포',position:'center',size:'medium',color:'#ffffff'}}}];
+  const model=new StudioModel(document,{pipelines:[{id:'crepe-backend-stg'}]});model.selectKey(0);
+  expect(model.removeButton()).toBe(true);expect(model.document.pages[0].buttons).toBeUndefined();expect(model.dirty).toBe(true);
+  model.undo();expect(model.document.pages[0].buttons?.[0]?.id).toBe('stg');
+});
