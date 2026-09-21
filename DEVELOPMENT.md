@@ -102,6 +102,19 @@ bun run source:run -- bun test packages/core/src/index.test.ts
 
 명령은 등록 시점의 절대 작업 디렉터리에서 실행됩니다. 호스트에 실행 중 상태를 먼저 게시하지 못하면 명령을 시작하지 않습니다. 호스트 액션의 60초 timeout과 1 MiB 출력 상한이 적용되며, 종료 신호는 자식 프로세스에도 전달됩니다.
 
+## Crepe GitHub Actions 파이프라인
+
+`gh`가 macOS Keychain으로 `github.com`에 인증된 상태에서 다음 명령을 실행하면 현재 개발 설정에 두 파이프라인과 `crepe-release` Studio 페이지를 원자적으로 등록합니다.
+
+```sh
+gh auth status --hostname github.com
+bun run github:register-crepe
+```
+
+기존 설정, 토큰, 페이지와 버튼은 보존합니다. 기존 마지막 페이지에는 새 페이지로 가는 `다음 페이지` 버튼을 빈 키에 추가합니다. 같은 등록을 반복해도 페이지나 버튼을 중복 생성하지 않습니다. 유효하지 않은 draft는 덮어쓰지 않습니다.
+
+Runtime은 `cut-rc.yaml`과 `backend-release-cut-prod.yaml`을 실행하고, 각각 `release-backend.yaml`과 `release-backend-prod.yaml`을 후속 run으로 연결합니다. Stg 승인은 `pending_deployments`의 정확한 `stg-backend` Environment로 판정합니다. Streamhub는 승인·거부 API를 호출하지 않습니다. 자동 테스트와 등록 명령도 실제 workflow를 dispatch하지 않습니다.
+
 ## 신뢰하는 목록 수집기 연결
 
 설정 파일의 `collectors`에 로컬 프로그램을 등록하면 시작 시 한 번, 이후 주기적으로 실행합니다. 같은 소스의 수집은 겹치지 않습니다.

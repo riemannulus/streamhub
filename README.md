@@ -110,6 +110,19 @@ streamhub uninstall
 
 제거는 먼저 관리 중인 Runtime 로그인 서비스를 중지하고 제거한 다음 현재 버전과 `~/.local/bin/streamhub` 링크를 지웁니다. 사용자 데이터, 설치된 Stream Deck 플러그인과 연결 정보는 보존됩니다.
 
+## Crepe 백엔드 릴리스 버튼
+
+소스 체크아웃에서는 인증된 GitHub CLI를 이용해 Crepe 백엔드 릴리스 페이지를 등록할 수 있습니다. GitHub 토큰은 Streamhub 설정이나 Studio 문서에 저장하지 않습니다.
+
+```sh
+gh auth status --hostname github.com
+bun run github:register-crepe
+bun start
+bun run editor
+```
+
+등록 명령은 설정과 Studio 페이지를 만들 뿐 GitHub Actions를 실행하지 않습니다. `RC 컷`은 짧게 눌러 실행하고 `Prod 승격`은 700ms 길게 눌러야 실행됩니다. `Stg 배포`는 `stg-backend` 승인 대기를 표시하며, 승인은 버튼이 아니라 GitHub 실행 화면에서 합니다. Stg·Prod 배포가 실패하면 상태 버튼을 눌러 실패한 job을 엽니다.
+
 ## 문제 해결
 
 **`streamhub` 명령을 찾지 못함**
