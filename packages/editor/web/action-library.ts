@@ -5,6 +5,7 @@ export type ActionGroup='기본'|'탐색'|'데이터';
 export type AdvancedActionType='multi-action'|'toggle-action'|'double-press'|'hold-action';
 export type ActionType=ButtonAction['type']|AdvancedActionType|'dynamic-region'|'dynamic-previous'|'dynamic-next'|'dynamic-pin';
 export type ActionItem={type:ActionType;label:string;description:string;group:ActionGroup;available:boolean;symbol:string};
+export type GitHubPipelineCatalogItem={id:string;label:string;roles:('trigger'|'deployment')[]};
 
 export const ACTION_ITEMS:readonly ActionItem[]=[
   {type:'open-app',label:'앱 열기',description:'설치된 앱을 실행합니다',group:'기본',available:true,symbol:'◉'},
@@ -14,6 +15,7 @@ export const ACTION_ITEMS:readonly ActionItem[]=[
   {type:'text',label:'텍스트',description:'현재 앱에 저장된 문구를 입력합니다',group:'기본',available:true,symbol:'T'},
   {type:'media',label:'미디어',description:'재생과 음량을 제어합니다',group:'기본',available:true,symbol:'▶'},
   {type:'registered',label:'등록된 명령',description:'Runtime에 허용된 명령을 실행합니다',group:'기본',available:true,symbol:'›_'},
+  {type:'github-pipeline',label:'GitHub Actions',description:'등록된 배포 파이프라인을 실행하거나 확인합니다',group:'기본',available:true,symbol:'GH'},
   {type:'none',label:'표시 전용',description:'누르지 않는 안내 키입니다',group:'기본',available:true,symbol:'◇'},
   {type:'multi-action',label:'여러 동작',description:'선택한 버튼에 순서 동작을 만듭니다',group:'기본',available:true,symbol:'≡'},
   {type:'toggle-action',label:'토글',description:'꺼짐과 켜짐 동작을 나눕니다',group:'기본',available:true,symbol:'⇄'},
@@ -35,7 +37,7 @@ export function filteredActions(query:string):ActionType[]{
   return ACTION_ITEMS.filter(item=>!needle||`${item.label} ${item.type}`.toLocaleLowerCase().includes(needle)).map(item=>item.type);
 }
 
-export function createButtonForAction(type:ButtonAction['type'],index:number,options:{pageId:string;appBundleId?:string;app?:AppCatalogItem;iconAssetId?:string;registered?:{name:string;args:string[]}[]}):ButtonDefinition{
+export function createButtonForAction(type:ButtonAction['type'],index:number,options:{pageId:string;appBundleId?:string;app?:AppCatalogItem;iconAssetId?:string;registered?:{name:string;args:string[]}[];pipelines?:GitHubPipelineCatalogItem[]}):ButtonDefinition{
   const item=ACTION_ITEMS.find(item=>item.type===type)!;
   let action:ButtonAction;
   if(type==='open-app')action={type,bundleId:options.app?.bundleId??options.appBundleId??'com.apple.Finder'};
@@ -45,9 +47,10 @@ export function createButtonForAction(type:ButtonAction['type'],index:number,opt
   else if(type==='text')action={type,text:'',mode:'type'};
   else if(type==='media')action={type,command:'play-pause'};
   else if(type==='registered'){const command=options.registered?.[0];action=command?{type,name:command.name,args:Object.fromEntries(command.args.map(key=>[key,'']))}:{type:'none'};}
+  else if(type==='github-pipeline'){const pipeline=options.pipelines?.[0];if(!pipeline)throw new Error('등록된 GitHub 파이프라인이 없습니다.');action={type,pipelineId:pipeline.id,role:'trigger'};}
   else if(type==='go-to-page')action={type,pageId:options.pageId};
   else action={type} as ButtonAction;
-  const icon=type==='open-app'&&options.iconAssetId?{assetId:options.iconAssetId,fit:'contain' as const}:undefined,label=type==='open-app'&&options.app?options.app.name:item.label;
+  const icon=type==='open-app'&&options.iconAssetId?{assetId:options.iconAssetId,fit:'contain' as const}:undefined,label=type==='open-app'&&options.app?options.app.name:type==='github-pipeline'?options.pipelines?.[0]?.label??item.label:item.label;
   return{id:crypto.randomUUID(),index,behavior:singlePressBehavior(action),appearance:{contentMode:icon?'icon-and-label':'label-only',...(icon?{icon}:{}),label:{text:label,position:'center',size:'medium',color:'#ffffff'},background:{color:'#172538',opacity:.82}}};
 }
 

@@ -25,8 +25,9 @@ async function chooseAction(type:ActionType,index=studio.model.selectedKey){
   }
   if(type.startsWith('dynamic-'))return;
   if(type==='registered'&&!studio.actions.length){showError('등록된 명령이 없습니다. Runtime 설정에서 먼저 명령을 등록하세요.');return;}
+  if(type==='github-pipeline'&&!studio.pipelines.length){showError('등록된 GitHub 파이프라인이 없습니다.');return;}
   if(currentPage().buttons?.some(button=>button.index===index)&&!confirm('이 키의 기존 버튼을 바꿀까요?'))return;
-  try{const app=type==='open-app'?studio.apps[0]:undefined;let iconAssetId:string|undefined;if(app)try{iconAssetId=await studio.appIcon(app.id);}catch(error){showError(error instanceof Error?error.message:String(error));}studio.model.selectKey(index);studio.model.setButton(createButtonForAction(type as ButtonAction['type'],index,{pageId:studio.model.selectedPageId,appBundleId:app?.bundleId,app,iconAssetId,registered:studio.actions}));changed();}catch(error){showError(error instanceof Error?error.message:String(error));}
+  try{const app=type==='open-app'?studio.apps[0]:undefined;let iconAssetId:string|undefined;if(app)try{iconAssetId=await studio.appIcon(app.id);}catch(error){showError(error instanceof Error?error.message:String(error));}studio.model.selectKey(index);studio.model.setButton(createButtonForAction(type as ButtonAction['type'],index,{pageId:studio.model.selectedPageId,appBundleId:app?.bundleId,app,iconAssetId,registered:studio.actions,pipelines:studio.pipelines}));changed();}catch(error){showError(error instanceof Error?error.message:String(error));}
 }
 function renderSurfaceTools(){
   const appearance=standby?studio.model.document.standby:currentPage().appearance;$('surface-title').textContent=standby?'대기 화면':currentPage().title;$('surface-description').textContent=standby?'Mac이 잠겼을 때 표시합니다.':'키 전체에 이어지는 배경을 설정합니다.';select('background-fit').value=appearance?.background?.fit??'cover';input('surface-color').value=appearance?.color??'#05070a';
@@ -38,7 +39,7 @@ function render(){
   renderActionLibrary($('actions'),query,chooseAction);$('action-pane').classList.toggle('disabled',standby);
   renderCanvas($('canvas'),studio.model,studio.geometry,{standby,select:index=>{studio.model.selectKey(index);render();},drop:(type,index)=>chooseAction(type,index),moveStart:index=>{dragSource={pageId:studio.model.selectedPageId,index};},moveDrop:index=>{if(!dragSource)return;try{const occupied=currentPage().buttons?.some(button=>button.index===index),swap=!!occupied&&confirm('두 버튼의 위치를 서로 바꿀까요?');if(occupied&&!swap)return;const moved=studio.model.moveButton(dragSource,{pageId:studio.model.selectedPageId,index},swap);dragSource=undefined;if(moved)changed();else render();}catch(error){showError(String(error));}}});
   if(standby){$('inspector').innerHTML='<div class="inspector-heading"><span>☾</span><div><h2>대기 화면</h2><small>잠금 상태</small></div></div><div class="empty-inspector"><b>전체 화면 설정</b><p>가운데 상단에서 배경 이미지, 색상과 맞춤 방식을 설정하세요.</p></div>';}
-  else renderInspector($('inspector'),studio.model,{apps:studio.apps,actions:studio.actions,upload:file=>studio.upload(file),appIcon:appId=>studio.appIcon(appId),chooseIcon:()=>chooseIconFromLibrary(studio),pick:kind=>studio.pick(kind),changed,error:showError,refresh:render});
+  else renderInspector($('inspector'),studio.model,{apps:studio.apps,actions:studio.actions,pipelines:studio.pipelines,upload:file=>studio.upload(file),appIcon:appId=>studio.appIcon(appId),chooseIcon:()=>chooseIconFromLibrary(studio),pick:kind=>studio.pick(kind),changed,error:showError,refresh:render});
   renderSurfaceTools();for(const [id,trigger] of [['page-motion','pageChange'],['unlock-motion','unlock'],['reconnect-motion','reconnect']] as const)select(id).value=studio.model.document.motion[trigger].type;
 }
 

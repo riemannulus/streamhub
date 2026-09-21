@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {isAbsolute} from 'node:path';
 import type {PageDefinition} from '../streamdeck/pages';
+import type {PipelineButtonRole} from '../github-actions/types';
 
 export type AssetPlacement={assetId:string;fit:'cover'|'contain'|'stretch'};
 export type StudioAppearance={background?:AssetPlacement;color?:string};
@@ -24,6 +25,7 @@ export type ButtonAction=
   |{type:'text';text:string;mode:'paste'|'type'}
   |{type:'media';command:MediaCommand}
   |{type:'registered';name:string;args:Record<string,string>}
+  |{type:'github-pipeline';pipelineId:string;role:PipelineButtonRole}
   |{type:'go-to-page';pageId:string}
   |{type:'previous-page'}
   |{type:'next-page'}
@@ -40,7 +42,7 @@ export type ButtonDefinition={id:string;index:number;behavior:KeyBehavior;appear
 export type StudioPage={id:string;title:string;match?:PageDefinition['match'];priority?:number;appearance?:StudioAppearance;buttons?:ButtonDefinition[]};
 export type TransitionSpec={type:'none'|'crossfade'|'fade-through-black';durationMs:number};
 export type StudioDocument={version:3;id:string;device:{kind:'streamdeck-classic-5x3'};defaultPageId:string;pages:StudioPage[];standby:StudioAppearance;motion:{pageChange:TransitionSpec;unlock:TransitionSpec;reconnect:TransitionSpec}};
-export type StudioValidationContext={sources?:readonly string[];actions?:Record<string,{args?:Record<string,unknown>}>;assets?:readonly string[]};
+export type StudioValidationContext={sources?:readonly string[];actions?:Record<string,{args?:Record<string,unknown>}>;assets?:readonly string[];pipelines?:readonly {id:string}[]};
 
 const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected object');return value as Record<string,unknown>;};
 const exact=(value:Record<string,unknown>,keys:readonly string[])=>{const unknown=Object.keys(value).find(key=>!keys.includes(key));if(unknown)throw new Error(`Unknown field: ${unknown}`);};
@@ -75,7 +77,7 @@ export function validateButtonAction(raw:unknown,context:StudioValidationContext
   const value=object(raw),type=value.type;
   if(typeof type!=='string')throw new Error('Invalid button action');
   const fields:Record<string,string[]>={
-    'none':[],'open-app':['bundleId'],'open-path':['path'],'open-url':['url','browserBundleId'],'hotkey':['keys'],'text':['text','mode'],'media':['command'],'registered':['name','args'],'go-to-page':['pageId'],'previous-page':[],'next-page':[],'page-indicator':[],'resume-auto-page':[],
+    'none':[],'open-app':['bundleId'],'open-path':['path'],'open-url':['url','browserBundleId'],'hotkey':['keys'],'text':['text','mode'],'media':['command'],'registered':['name','args'],'github-pipeline':['pipelineId','role'],'go-to-page':['pageId'],'previous-page':[],'next-page':[],'page-indicator':[],'resume-auto-page':[],
   };
   if(!Object.hasOwn(fields,type))throw new Error('Invalid button action');exact(value,['type',...fields[type]]);
   if(type==='none'||type==='previous-page'||type==='next-page'||type==='page-indicator'||type==='resume-auto-page')return{type} as ButtonAction;
@@ -86,6 +88,7 @@ export function validateButtonAction(raw:unknown,context:StudioValidationContext
   if(type==='text'){if(value.mode!=='paste'&&value.mode!=='type')throw new Error('Invalid text mode');return{type,text:bodyText(value.text,4096),mode:value.mode};}
   if(type==='media'){if(!MEDIA_COMMANDS.includes(value.command as MediaCommand))throw new Error('Invalid media command');return{type,command:value.command as MediaCommand};}
   if(type==='go-to-page')return{type,pageId:identifier(value.pageId,'target page')};
+  if(type==='github-pipeline'){const pipelineId=identifier(value.pipelineId,'GitHub pipeline');if(value.role!=='trigger'&&value.role!=='deployment')throw new Error('Invalid GitHub pipeline role');if(!context.pipelines?.some(item=>item.id===pipelineId))throw new Error(`Unknown GitHub pipeline: ${pipelineId}`);return{type,pipelineId,role:value.role};}
   const name=text(value.name,128),args=object(value.args);if(Object.keys(args).length>32)throw new Error('Too many action arguments');if(context.actions&&!Object.hasOwn(context.actions,name))throw new Error(`Unknown action: ${name}`);
   const definition=context.actions?.[name]?.args;if(definition){const extra=Object.keys(args).find(key=>!Object.hasOwn(definition,key));if(extra)throw new Error(`Unknown action argument: ${extra}`);const missing=Object.keys(definition).find(key=>!Object.hasOwn(args,key));if(missing)throw new Error(`Missing action argument: ${missing}`);}
   return{type:'registered',name,args:Object.fromEntries(Object.entries(args).map(([key,item])=>[text(key,128),bodyText(item,512)]))};
@@ -107,6 +110,7 @@ function validateActionSequence(raw:unknown,context:StudioValidationContext):Act
     }
     if(step.type!=='action')throw new Error('Invalid action step');
     exact(step,['type','action']);const action=validateButtonAction(step.action,context);
+    if(action.type==='github-pipeline')throw new Error('GitHub pipeline actions require a single program');
     if(action.type==='none'||action.type==='page-indicator')throw new Error('Sequence requires executable actions');
     if(navigation(action)&&(value.mode==='parallel'||index!==rawSteps.length-1))throw new Error('Navigation must be the final sequential action');
     return{type:'action',action};
@@ -156,7 +160,7 @@ export function validateStudioDocument(raw:unknown,context:StudioValidationConte
     if(input.priority!==undefined){if(!Number.isInteger(input.priority)||(input.priority as number)<-1000||(input.priority as number)>1000)throw new Error('Invalid priority');page.priority=input.priority as number;}
     if(input.match!==undefined){const match=object(input.match);exact(match,['appBundleId','windowTitle','displayId']);if(!Object.keys(match).length)throw new Error('Expected a page condition');const normalized:NonNullable<StudioPage['match']>={};if(match.appBundleId!==undefined)normalized.appBundleId=bundleId(match.appBundleId);if(match.windowTitle!==undefined){const title=object(match.windowTitle);exact(title,['mode','value']);if(title.mode!=='equals'&&title.mode!=='contains')throw new Error('Invalid title condition');normalized.windowTitle={mode:title.mode,value:text(title.value,512)};}if(match.displayId!==undefined)normalized.displayId=text(match.displayId,128);page.match=normalized;}
     if(input.appearance!==undefined)page.appearance=studioAppearance(input.appearance,context);
-    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','behavior','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);return{id:buttonId,index:button.index as number,behavior:validateKeyBehavior(button.behavior,context),appearance:validateButtonAppearance(button.appearance,context)};});}
+    if(input.buttons!==undefined){if(!Array.isArray(input.buttons)||input.buttons.length>15)throw new Error('Expected at most 15 buttons');const indices=new Set<number>();page.buttons=input.buttons.map(rawButton=>{const button=object(rawButton);exact(button,['id','index','behavior','appearance']);const buttonId=identifier(button.id,'button ID');if(buttonIds.has(buttonId))throw new Error('Duplicate button ID');buttonIds.add(buttonId);if(!Number.isInteger(button.index)||(button.index as number)<0||(button.index as number)>14||indices.has(button.index as number))throw new Error('Invalid or duplicate button index');indices.add(button.index as number);const behavior=validateKeyBehavior(button.behavior,context),pipelines=actionsInBehavior(behavior).filter((action):action is Extract<ButtonAction,{type:'github-pipeline'}>=>action.type==='github-pipeline');if(pipelines.some(action=>action.pipelineId!==pipelines[0]?.pipelineId||action.role!==pipelines[0]?.role))throw new Error('Every branch must use the same GitHub pipeline binding');return{id:buttonId,index:button.index as number,behavior,appearance:validateButtonAppearance(button.appearance,context)};});}
     return page;
   });
   const defaultPageId=identifier(value.defaultPageId,'default page');if(!pageIds.has(defaultPageId))throw new Error('Unknown default page');

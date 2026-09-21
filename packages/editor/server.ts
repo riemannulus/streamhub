@@ -18,6 +18,7 @@ import {IconPackCatalog} from './icon-packs';
 import {normalizeVisualAsset} from '../studio/assets';
 import type {DisplayMode} from '../host/src/config';
 import type {StudioDisplayStatus} from '../host/src/runtime';
+import type {StudioValidationContext} from '../studio/document';
 
 const LIMIT = 9 * 1024 * 1024;
 const ASSETS = new Map([['/','index.html'],['/app.js','app.js'],['/style.css','style.css'],['/icon-library.css','icon-library.css'],['/display-settings.css','display-settings.css']]);
@@ -29,9 +30,11 @@ type Client = {session?: SimulatorSession};
 
 /** Local editor capabilities are separate from host/source credentials. No real hardware or actions are opened. */
 export function startEditorServer(options: {port?: number; assetsDir?: string;appCatalog?:Pick<AppCatalog,'apps'>;appIcons?:Pick<AppIconProvider,'read'>;pickPath?:(kind:'file'|'folder')=>Promise<PathPickerResult>;iconPacks?:Pick<IconPackCatalog,'packs'|'icons'|'read'>} = {}) {
-  readConfig(true);
+  const initialConfig=readConfig(true);
   const studioDirectory=join(dirname(process.env.STREAMHUB_CONFIG??resolve('.streamhub/config.json')),'studio');
-  const repository=new StudioRepository(studioDirectory);
+  const validationContext=(config:Config):StudioValidationContext=>({pipelines:config.githubActions?.pipelines.map(({id})=>({id}))??[]});
+  const pipelineCatalog=(config:Config)=>config.githubActions?.pipelines.map(({id})=>({id,label:id.split('-').map(part=>part[0]!.toUpperCase()+part.slice(1)).join(' '),roles:['trigger','deployment'] as const}))??[];
+  const repository=new StudioRepository(studioDirectory,validationContext(initialConfig));
   const draftPath=join(studioDirectory,'draft.json');
   const token = randomBytes(32).toString('hex');
   const assets = resolve(options.assetsDir ?? '.streamhub/editor');
@@ -64,7 +67,7 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         return new Response(Bun.file(path),{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; sandbox allow-scripts"}});
       }
       if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
-        try { const config = readConfig(),snapshot=repository.snapshot();const display=await runtimeDisplay(config);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')));}catch{}return json({token,sources:Object.keys(config.sources),actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})),configVersion:version(config),snapshot,draft,display,runtimeStatus:display,geometry:streamDeckClassicGeometry}); }
+        try { const config = readConfig(),snapshot=repository.snapshot();const display=await runtimeDisplay(config);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio`,{headers:{Authorization:`Bearer ${config.adminToken}`}});if(response.ok){const live=await response.json() as any;snapshot.document=live.document;snapshot.version=live.version;}}catch{}let draft;try{draft=validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')),validationContext(config));}catch{}return json({token,sources:Object.keys(config.sources),actions:Object.entries(config.actions??{}).map(([name,definition])=>({name,args:Object.keys(definition.args)})),configVersion:version(config),snapshot,draft,display,runtimeStatus:display,geometry:streamDeckClassicGeometry}); }
         catch { return json({error:'Could not read configuration'}, 500); }
       }
       const visualAsset=/^\/api\/assets\/([a-f0-9]{64})$/.exec(url.pathname);if(visualAsset&&request.method==='GET'){try{const bytes=await repository.assets.read(visualAsset[1]);return new Response(new Blob([new Uint8Array(bytes)]),{headers:{...headers,'Content-Type':'image/png'}});}catch{return json({error:'Not found'},404);}}
@@ -89,6 +92,9 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
         }
         if(url.pathname==='/api/catalog/actions'&&request.method==='GET'){
           try{return json(actionCatalog(readConfig().actions??{}));}catch{return json({error:'동작 목록을 불러오지 못했습니다.'},500);}
+        }
+        if(url.pathname==='/api/catalog/github-pipelines'&&request.method==='GET'){
+          try{return json(pipelineCatalog(readConfig()));}catch{return json({error:'GitHub 파이프라인 목록을 불러오지 못했습니다.'},500);}
         }
         if(url.pathname==='/api/icon-packs'&&request.method==='GET'){
           try{return json(await iconPacks.packs());}catch{return json({error:'아이콘팩 목록을 불러오지 못했습니다.'},500);}
@@ -127,10 +133,10 @@ export function startEditorServer(options: {port?: number; assetsDir?: string;ap
           }catch(error){return json({error:error instanceof Error?error.message:'미리보기를 만들지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/draft'&&request.method==='POST'){
-          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,document=validateStudioDocument(payload.document,{sources:Object.keys(readConfig().sources)});writeFileSync(draftPath,JSON.stringify(document,null,2)+'\n',{mode:0o600});return json({document});}catch(error){return json({error:error instanceof Error?error.message:'초안을 저장하지 못했습니다.'},400);}
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,config=readConfig(),document=validateStudioDocument(payload.document,{sources:Object.keys(config.sources),...validationContext(config)});writeFileSync(draftPath,JSON.stringify(document,null,2)+'\n',{mode:0o600});return json({document});}catch(error){return json({error:error instanceof Error?error.message:'초안을 저장하지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/apply'&&request.method==='POST'){
-          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,config=readConfig(),document=validateStudioDocument(payload.document,{sources:Object.keys(config.sources)});if(typeof payload.expectedVersion!=='string')return json({error:'Invalid expectedVersion'},400);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio/apply`,{method:'POST',headers:{Authorization:`Bearer ${config.adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({document,expectedVersion:payload.expectedVersion})});if(response.ok)return json({...await response.json() as object,runtimeStatus:{connected:true}});if(response.status===409)return json({error:'다른 곳에서 변경되었습니다. 다시 불러오세요.'},409);}catch{}const saved=repository.apply(document,payload.expectedVersion);return json({...saved,runtimeStatus:{connected:false,message:'Runtime이 꺼져 있어 다음 시작 때 적용됩니다.'}});}catch(error){return error instanceof StudioVersionConflictError?json({error:error.message},409):json({error:error instanceof Error?error.message:'적용하지 못했습니다.'},400);}
+          if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return json({error:'JSON required'},415);try{const payload=await request.json() as any,config=readConfig(),document=validateStudioDocument(payload.document,{sources:Object.keys(config.sources),...validationContext(config)});if(typeof payload.expectedVersion!=='string')return json({error:'Invalid expectedVersion'},400);try{const response=await fetch(`http://127.0.0.1:${config.port}/v1/studio/apply`,{method:'POST',headers:{Authorization:`Bearer ${config.adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({document,expectedVersion:payload.expectedVersion})});if(response.ok)return json({...await response.json() as object,runtimeStatus:{connected:true}});if(response.status===409)return json({error:'다른 곳에서 변경되었습니다. 다시 불러오세요.'},409);}catch{}const saved=repository.apply(document,payload.expectedVersion);return json({...saved,runtimeStatus:{connected:false,message:'Runtime이 꺼져 있어 다음 시작 때 적용됩니다.'}});}catch(error){return error instanceof StudioVersionConflictError?json({error:error.message},409):json({error:error instanceof Error?error.message:'적용하지 못했습니다.'},400);}
         }
         if(url.pathname==='/api/check'&&request.method==='POST'){
           if(checking)return json({error:'A check is already running'},409);

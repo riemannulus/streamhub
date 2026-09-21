@@ -33,7 +33,8 @@ const branchLabels:Record<BehaviorBranch,string>={press:'누르기',doublePress:
 const selectedBranches=new Map<string,BehaviorBranch>();
 export const selectedBranchFor=(buttonId:string)=>selectedBranches.get(buttonId)??'press';
 export function setSingleAction(input:ButtonDefinition,branch:BehaviorBranch,action:ButtonAction){return updateProgram(input,branch,{type:'single',action});}
-const describeAction=(action:ButtonAction)=>({'open-app':'앱 열기','open-path':'파일·폴더','open-url':'웹사이트','hotkey':'단축키','text':'텍스트','media':'미디어','registered':'등록 명령','go-to-page':'페이지 이동','previous-page':'이전 페이지','next-page':'다음 페이지','page-indicator':'페이지 표시','resume-auto-page':'자동 복귀','none':'표시 전용'}[action.type]);
+const actionLabels:Record<ButtonAction['type'],string>={'open-app':'앱 열기','open-path':'파일·폴더','open-url':'웹사이트','hotkey':'단축키','text':'텍스트','media':'미디어','registered':'등록 명령','github-pipeline':'GitHub Actions','go-to-page':'페이지 이동','previous-page':'이전 페이지','next-page':'다음 페이지','page-indicator':'페이지 표시','resume-auto-page':'자동 복귀','none':'표시 전용'};
+const describeAction=(action:ButtonAction)=>actionLabels[action.type];
 const describeSequence=(sequence:ActionSequence)=>sequence.steps.map(step=>step.type==='delay'?`${step.milliseconds}ms 기다리기`:describeAction(step.action)).join(' → ');
 
 export function renderBehaviorEditor(container:HTMLElement,button:ButtonDefinition,onChange:(next:ButtonDefinition)=>void,onRefresh:()=>void):void{

@@ -4,6 +4,7 @@ import {StudioModel} from './model';
 import type {IconPackIcon,IconPackSummary} from '../icon-packs';
 import type {DisplayMode} from '../../host/src/config';
 import type {StudioDisplayStatus} from '../../host/src/runtime';
+import type {GitHubPipelineCatalogItem} from './action-library';
 
 export type Geometry={x:number[];y:number[]};
 export type RegisteredActionItem={name:string;args:string[]};
@@ -14,6 +15,7 @@ export class StudioState{
   readonly model:StudioModel;
   apps:AppCatalogItem[]=[];
   actions:RegisteredActionItem[]=[];
+  pipelines:GitHubPipelineCatalogItem[]=[];
   display:StudioDisplayStatus;
   runtimeStatus:StudioDisplayStatus;
   private configVersion:string;
@@ -24,8 +26,9 @@ export class StudioState{
     const response=await request('/api/bootstrap');const bootstrap=await response.json() as Bootstrap;if(!response.ok)throw new Error('Studio를 불러오지 못했습니다.');
     const state=new StudioState(request,bootstrap.token,bootstrap.snapshot.version,bootstrap.geometry,bootstrap);
     const headers={'X-Streamhub-Editor':bootstrap.token};
-    const [apps,actions]=await Promise.all([request('/api/catalog/apps',{headers}),request('/api/catalog/actions',{headers})]);
+    const [apps,actions,pipelines]=await Promise.all([request('/api/catalog/apps',{headers}),request('/api/catalog/actions',{headers}),request('/api/catalog/github-pipelines',{headers})]);
     if(apps.ok)state.apps=await apps.json() as AppCatalogItem[];if(actions.ok)state.actions=await actions.json() as RegisteredActionItem[];
+    if(pipelines.ok)state.pipelines=await pipelines.json() as GitHubPipelineCatalogItem[];
     return state;
   }
   changed():void{this.draftQueue=this.draftQueue.then(()=>this.saveDraft()).catch(()=>{});}

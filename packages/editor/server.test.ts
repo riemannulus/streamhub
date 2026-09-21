@@ -113,6 +113,17 @@ test('catalog and native picker APIs expose only bounded local choices',async()=
   expect(picks).toEqual(['file','folder']);
 });
 
+test('GitHub pipeline catalog exposes IDs and roles without repository or workflow configuration',async()=>{
+  const githubActions={executable:'/opt/homebrew/bin/gh',pipelines:[
+    {id:'crepe-backend-stg',repository:'cookieplace/crepe',ref:'develop',trigger:{workflow:'cut-rc.yaml',inputs:{'force-bump':'auto'},gesture:'press'},chain:{kind:'tag-push',anchorJob:'cut-rc',anchorStep:'Push rc tag',tagPattern:'backend/v*.*.*-rc.*'},deployment:{workflow:'release-backend.yaml',event:'push',approvalEnvironment:'stg-backend'}},
+  ]};
+  const {url,bootstrap}=await setup({}, {...baseConfig(),githubActions} as any),headers={'X-Streamhub-Editor':bootstrap.token};
+  expect((await fetch(`${url}/api/catalog/github-pipelines`)).status).toBe(403);
+  const catalog=await (await fetch(`${url}/api/catalog/github-pipelines`,{headers})).json();
+  expect(catalog).toEqual([{id:'crepe-backend-stg',label:'Crepe Backend Stg',roles:['trigger','deployment']}]);
+  expect(JSON.stringify(catalog)).not.toContain('cookieplace');expect(JSON.stringify(catalog)).not.toContain('cut-rc');expect(JSON.stringify(catalog)).not.toContain('/opt/homebrew');
+});
+
 test('app icon API resolves an opaque catalog id and stores a normalized Studio asset',async()=>{
   const png=await sharp({create:{width:32,height:32,channels:4,background:{r:255,g:80,b:20,alpha:0.7}}}).png().toBuffer();
   const app={id:'bundle:org.mozilla.firefox',name:'Firefox',bundleId:'org.mozilla.firefox',path:'/Applications/Firefox.app'};

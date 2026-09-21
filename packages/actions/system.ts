@@ -147,6 +147,7 @@ export class SystemActionCatalog{
     if(validated.type==='open-app'){await this.process({argv:['/usr/bin/open','-b',validated.bundleId],timeoutMs:3000,maxOutputBytes:4096},signal);return;}
     if(validated.type==='open-path'){await this.process({argv:['/usr/bin/open',validated.path],timeoutMs:3000,maxOutputBytes:4096},signal);return;}
     if(validated.type==='open-url'){await this.process({argv:['/usr/bin/open',...(validated.browserBundleId?['-b',validated.browserBundleId]:[]),validated.url],timeoutMs:3000,maxOutputBytes:4096},signal);return;}
+    if(validated.type==='github-pipeline')throw new Error('GitHub pipeline actions must be handled by Presentation');
     const result=await this.native(validated,signal);if(!result.ok)throw new SystemActionError(result.error??'native-action-failed');
   }
 }

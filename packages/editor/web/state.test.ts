@@ -5,6 +5,7 @@ import type {ButtonAction,ButtonDefinition} from '../../studio/document';
 import {defaultStudioDocument,singlePressBehavior,validateStudioDocument} from '../../studio/document';
 import {createButtonForAction} from './action-library';
 import {StudioState} from './state';
+import {buttonBadge} from './canvas-view';
 
 const appearance={contentMode:'hidden' as const};
 test('action search matches Korean labels and stable action types across groups',()=>{
@@ -25,8 +26,8 @@ test('inspector fields depend on action while appearance fields stay explicit',(
 test('every available core library action creates a valid v3 button',()=>{
   const types=filteredActions('').filter(type=>!type.startsWith('dynamic-')&&!['multi-action','toggle-action','double-press','hold-action'].includes(type)) as ButtonAction['type'][];
   for(const [index,type] of types.entries()){
-    const document=defaultStudioDocument();document.pages[0].buttons=[createButtonForAction(type,index,{pageId:'home',appBundleId:'org.mozilla.firefox',registered:[{name:'build',args:['target']} ]})];
-    expect(()=>validateStudioDocument(document,{actions:{build:{args:{target:{}}}}})).not.toThrow();
+    const document=defaultStudioDocument();document.pages[0].buttons=[createButtonForAction(type,index,{pageId:'home',appBundleId:'org.mozilla.firefox',registered:[{name:'build',args:['target']} ],pipelines:[{id:'crepe-backend-stg',label:'Crepe Backend Stg',roles:['trigger','deployment']}]})];
+    expect(()=>validateStudioDocument(document,{actions:{build:{args:{target:{}}}},pipelines:[{id:'crepe-backend-stg'}]})).not.toThrow();
   }
 });
 
@@ -38,6 +39,15 @@ test('an app action can start with its native icon and app name',()=>{
     iconAssetId,
   } as never);
   expect(button.appearance).toMatchObject({contentMode:'icon-and-label',icon:{assetId:iconAssetId,fit:'contain'},label:{text:'Firefox'}});
+});
+
+test('GitHub Actions library creates a trusted pipeline binding and canvas badge',()=>{
+  expect(filteredActions('GitHub')).toEqual(['github-pipeline']);
+  const button=createButtonForAction('github-pipeline',0,{pageId:'home',pipelines:[{id:'crepe-backend-stg',label:'Crepe Backend Stg',roles:['trigger','deployment']}]});
+  const document=defaultStudioDocument();document.pages[0].buttons=[button];
+  expect(()=>validateStudioDocument(document,{pipelines:[{id:'crepe-backend-stg'}]})).not.toThrow();
+  expect(button.behavior.press).toMatchObject({action:{type:'github-pipeline',pipelineId:'crepe-backend-stg',role:'trigger'}});
+  expect(buttonBadge(button)).toBe('GITHUB');
 });
 
 test('each successful change queues exactly one draft save',async()=>{

@@ -2,6 +2,7 @@ import type {AppCatalogItem,PathPickerResult} from '../../host/src/catalog';
 import {KEY_CODES,MEDIA_COMMANDS,primaryButtonAction,singlePressBehavior,type ButtonAction,type ButtonDefinition, type ButtonAppearance} from '../../studio/document';
 import type {StudioModel} from './model';
 import {renderBehaviorEditor,selectedBranchFor,setSingleAction} from './behavior-editor';
+import type {GitHubPipelineCatalogItem} from './action-library';
 
 export type InspectorField='empty'|'action'|'content-mode'|'icon'|'label'|'background';
 export function inspectorFor(button?:ButtonDefinition):InspectorField[]{
@@ -11,7 +12,7 @@ export function inspectorFor(button?:ButtonDefinition):InspectorField[]{
   return currentAction.type==='none'||currentAction.type==='previous-page'||currentAction.type==='next-page'||currentAction.type==='page-indicator'||currentAction.type==='resume-auto-page'?[...appearance]:['action',...appearance];
 }
 
-type Resources={apps:AppCatalogItem[];actions:{name:string;args:string[]}[];upload(file:File):Promise<string>;appIcon(appId:string):Promise<string>;chooseIcon():Promise<string|undefined>;pick(kind:'file'|'folder'):Promise<PathPickerResult>;changed():void;error(message:string):void;refresh():void};
+type Resources={apps:AppCatalogItem[];actions:{name:string;args:string[]}[];pipelines:GitHubPipelineCatalogItem[];upload(file:File):Promise<string>;appIcon(appId:string):Promise<string>;chooseIcon():Promise<string|undefined>;pick(kind:'file'|'folder'):Promise<PathPickerResult>;changed():void;error(message:string):void;refresh():void};
 const control=(label:string,node:HTMLElement)=>{const wrapper=document.createElement('label');wrapper.append(document.createTextNode(label),node);return wrapper;};
 const input=(value='',type='text')=>Object.assign(document.createElement('input'),{value,type});
 const select=(values:{value:string;label:string}[],value:string)=>{const node=document.createElement('select');for(const item of values)node.add(new Option(item.label,item.value));node.value=value;return node;};
@@ -41,6 +42,9 @@ export function renderInspector(container:HTMLElement,model:StudioModel,resource
     const labels:Record<string,string>={'play-pause':'재생 / 일시정지','previous-track':'이전 트랙','next-track':'다음 트랙','volume-up':'음량 높이기','volume-down':'음량 낮추기','mute-toggle':'음소거 전환'},media=select(MEDIA_COMMANDS.map(value=>({value,label:labels[value]})),currentAction.command);media.onchange=()=>updateAction({type:'media',command:media.value as typeof currentAction.command});action.append(control('미디어 동작',media));
   }else if(currentAction.type==='registered'){
     const command=select(resources.actions.map(item=>({value:item.name,label:item.name})),currentAction.name);command.onchange=()=>{const definition=resources.actions.find(item=>item.name===command.value);updateAction({type:'registered',name:command.value,args:Object.fromEntries((definition?.args??[]).map(key=>[key,'']))});};action.append(control('등록된 명령',command));for(const [key,current] of Object.entries(currentAction.args)){const value=input(current);value.onchange=()=>updateAction({...currentAction,args:{...currentAction.args,[key]:value.value}});action.append(control(key,value));}
+  }else if(currentAction.type==='github-pipeline'){
+    const pipeline=select(resources.pipelines.map(item=>({value:item.id,label:item.label})),currentAction.pipelineId);pipeline.onchange=()=>updateAction({type:'github-pipeline',pipelineId:pipeline.value,role:currentAction.role});action.append(control('파이프라인',pipeline));
+    const role=select([{value:'trigger',label:'실행'},{value:'deployment',label:'배포 상태'}],currentAction.role);role.onchange=()=>updateAction({...currentAction,role:role.value as 'trigger'|'deployment'});action.append(control('역할',role));
   }else if(currentAction.type==='go-to-page'){
     const target=select(model.document.pages.map(item=>({value:item.id,label:item.title})),currentAction.pageId);target.onchange=()=>updateAction({type:'go-to-page',pageId:target.value});action.append(control('이동할 페이지',target));
   }else{action.remove();}

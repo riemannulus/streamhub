@@ -84,4 +84,18 @@ describe('StudioDocument v3',()=>{
     for(const doublePressMs of [149,751])expect(()=>validateKeyBehavior({...single,doublePressMs})).toThrow('150–750');
     for(const holdMs of [299,2_001,300])expect(()=>validateKeyBehavior({...single,holdMs})).toThrow(holdMs===300?'greater':'300–2000');
   });
+
+  test('validates trusted GitHub pipeline bindings and confines them to single programs',()=>{
+    const document=defaultStudioDocument();document.pages[0].buttons=[{id:'prod',index:0,behavior:{
+      press:{type:'single',action:{type:'github-pipeline',pipelineId:'crepe-backend-prod',role:'trigger'}},
+      hold:{type:'single',action:{type:'github-pipeline',pipelineId:'crepe-backend-prod',role:'trigger'}},
+      doublePressMs:300,holdMs:700,
+    },appearance:{contentMode:'label-only',label:{text:'Prod 승격',position:'center',size:'medium',color:'#ffffff'}}}];
+    expect(validateStudioDocument(document,{pipelines:[{id:'crepe-backend-prod'}]}).pages[0].buttons).toHaveLength(1);
+    expect(()=>validateStudioDocument(document,{pipelines:[]})).toThrow('Unknown GitHub pipeline');
+    const mixed=structuredClone(document);(mixed.pages[0].buttons![0]!.behavior.hold as any).action.role='deployment';
+    expect(()=>validateStudioDocument(mixed,{pipelines:[{id:'crepe-backend-prod'}]})).toThrow('same GitHub pipeline');
+    const sequence=structuredClone(document);sequence.pages[0].buttons![0]!.behavior.press={type:'sequence',sequence:{mode:'sequential',steps:[{type:'action',action:{type:'github-pipeline',pipelineId:'crepe-backend-prod',role:'trigger'}}]}};
+    expect(()=>validateStudioDocument(sequence,{pipelines:[{id:'crepe-backend-prod'}]})).toThrow('single');
+  });
 });
