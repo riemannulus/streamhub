@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configuredDisplay, readConfig, updateConfig, validateConfig } from './config';
+import {CREPE_PIPELINES} from '../../github-actions/crepe';
 
 const original = process.env.STREAMHUB_CONFIG;
 const directories: string[] = [];
@@ -127,4 +128,21 @@ test('canonical display validation rejects unknown modes and fields',()=>{
   expect(()=>validateConfig({...valid(),display:{mode:'automatic'}})).toThrow('Invalid display config');
   expect(()=>validateConfig({...valid(),display:{mode:'hid',devicePath:'/dev/test'}})).toThrow('Invalid display config');
   expect(()=>validateConfig({...valid(),display:{mode:'plugin'}})).toThrow('Invalid display config');
+});
+
+test('GitHub Actions configuration accepts only absolute executables and trusted pipeline definitions',()=>{
+  const githubActions={executable:'/opt/homebrew/bin/gh',pipelines:CREPE_PIPELINES.map(item=>structuredClone(item))};
+  expect(validateConfig({...valid(),githubActions}).githubActions).toEqual(githubActions);
+  const invalid:unknown[]=[
+    {...githubActions,executable:'gh'},
+    {...githubActions,extra:true},
+    {...githubActions,pipelines:[...structuredClone(CREPE_PIPELINES),structuredClone(CREPE_PIPELINES[0])]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),repository:''}]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),ref:'bad ref'}]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),trigger:{...structuredClone(CREPE_PIPELINES[0]!.trigger),workflow:'../bad.yaml'}}]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),trigger:{...structuredClone(CREPE_PIPELINES[0]!.trigger),inputs:Object.fromEntries(Array.from({length:17},(_,index)=>[`x${index}`,'v']))}}]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),trigger:{...structuredClone(CREPE_PIPELINES[0]!.trigger),inputs:{bad:2}}}]},
+    {...githubActions,pipelines:[{...structuredClone(CREPE_PIPELINES[0]),chain:{...structuredClone(CREPE_PIPELINES[0]!.chain),kind:'release-published'},deployment:{...structuredClone(CREPE_PIPELINES[0]!.deployment),event:'push'}}]},
+  ];
+  for(const value of invalid)expect(()=>validateConfig({...valid(),githubActions:value})).toThrow();
 });

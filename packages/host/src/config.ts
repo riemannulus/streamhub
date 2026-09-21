@@ -4,6 +4,8 @@ import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } 
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { ActionRegistry, type ActionDefinition } from './actions';
 import { validatePageConfig, validatePageSources, type PageConfig } from '../../streamdeck/pages';
+import {validatePipelineDefinitions} from '../../github-actions/crepe';
+import type {GitHubActionsConfig} from '../../github-actions/types';
 
 export type SourceConfig = { token: string; allowedHosts?: string[] };
 export type AuthConfig = { adminToken: string; sources: Record<string, SourceConfig> };
@@ -14,6 +16,7 @@ export type Config = AuthConfig & {
   display: DisplayConfig;
   actions?: Record<string, ActionDefinition>;
   collectors?: Array<{ source: string; exec: string[]; intervalMs: number; timeoutMs?: number }>;
+  githubActions?: GitHubActionsConfig;
 };
 export const configPath = () => resolve(process.env.STREAMHUB_CONFIG ?? '.streamhub/config.json');
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -90,6 +93,10 @@ export function validateConfig(input: unknown): Config {
     if (!strings(collector.exec)) throw new Error('Invalid collector executable');
     new ActionRegistry({ collect: { exec: collector.exec, args: {}, sources: [collector.source], timeoutMs: collector.timeoutMs as number | undefined, maxOutputBytes: 1048576 } });
     collected.add(collector.source);
+  }
+  if(config.githubActions!==undefined){
+    if(!record(config.githubActions)||Object.keys(config.githubActions).some(key=>!['executable','pipelines'].includes(key))||typeof config.githubActions.executable!=='string'||!isAbsolute(config.githubActions.executable))throw new Error('Invalid GitHub Actions config');
+    config={...config,githubActions:{executable:config.githubActions.executable,pipelines:validatePipelineDefinitions(config.githubActions.pipelines)}};
   }
   if (legacyBoard) validateButtonActions(legacyBoard as PageConfig, config.actions as Config['actions']);
   return config as Config;
