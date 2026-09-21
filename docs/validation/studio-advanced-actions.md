@@ -50,3 +50,31 @@ git diff --check
 - [ ] 플러그인 연결 종료 중 대기 동작: 남은 leaf 취소, 재연결 뒤 자동 재시도 없음
 
 각 항목에는 관찰된 분기, 중복 효과 수, 취소 결과와 재시작 후 토글 상태를 적는다. 완료 전에는 M2의 **실기기 승인**을 주장하지 않는다.
+
+## GitHub Actions 파이프라인 버튼 자동 검증
+
+- 자동 검증 날짜: 2026-09-21 (Asia/Seoul)
+- 실제 workflow dispatch: **수행하지 않음**
+- 실제 장치 승인: **대기**
+
+fake GitHub gateway, 실제 pipeline 상태 모듈, SQLite persistence seam, Presentation과 가짜 deck backend를 연결해 다음을 확인했다.
+
+- RC 컷은 press에서만 dispatch 의도를 한 번 만든다.
+- Prod 승격은 press에서 현재 run을 열고 700ms hold에서만 dispatch 의도를 만든다.
+- `pending_deployments`의 정확한 `stg-backend` Environment가 주황 `승인 대기`로 표시된다.
+- 승인 해제 뒤 배포 실패가 빨강으로 바뀌고 상태 버튼이 최초 실패 job URL을 연다.
+- dispatch 도중 snapshot refresh가 진행 중 dispatch를 취소하지 않는다.
+- Runtime 재시작 뒤 저장된 exact run ID와 실패 URL을 복구한다.
+- dispatch보다 오래된 배포 run을 새 파이프라인에 연결하지 않는다.
+- packaged Runtime에 `packages/github-actions`가 포함되고 test/private 파일은 제외된다.
+
+자동 검증 결과:
+
+```text
+focused GitHub/Presentation/package suites: 65 pass, 0 fail
+repository check: 443 pass, 0 fail
+Stream Deck plugin check: 8 pass, 0 fail
+TypeScript and git diff whitespace checks: pass
+```
+
+읽기 전용 GitHub smoke에서 Keychain 계정 `riemannulus` 인증, 최신 Stg run 조회, `pending_deployments` JSON 배열 응답을 확인했다. 토큰 평문은 읽거나 저장하지 않았다. `bun run github:register-crepe`는 현재 개발 설정과 applied/draft Studio 문서에 두 pipeline과 한 `crepe-release` 페이지를 중복 없이 등록했으며 workflow는 실행하지 않았다.

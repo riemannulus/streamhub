@@ -1,8 +1,9 @@
 import {runBoundedProcess,type ProcessRequest,type ProcessResult} from '../actions/system';
 import type {GitHubActionsGateway,GitHubJob,GitHubPendingDeployment,GitHubRelease,GitHubRunDetails,GitHubStep,GitHubWorkflowRun,PipelineDefinition} from './types';
+import {homedir} from 'node:os';
 
 type RunProcess=(request:ProcessRequest,signal?:AbortSignal)=>Promise<ProcessResult>;
-export type GitHubCliGatewayOptions={executable:string;runProcess?:RunProcess};
+export type GitHubCliGatewayOptions={executable:string;home?:string;runProcess?:RunProcess};
 
 class GitHubCliError extends Error{
   constructor(readonly code:'command-failed'|'invalid-response'|'invalid-url',message:string){super(message);this.name='GitHubCliError';}
@@ -42,9 +43,9 @@ function parseJob(raw:unknown,repository:string):GitHubJob{
 
 export function createGitHubCliGateway(options:GitHubCliGatewayOptions):GitHubActionsGateway{
   if(!options.executable.startsWith('/'))throw new Error('GitHub CLI executable must be absolute');
-  const execute=options.runProcess??runBoundedProcess;
+  const execute=options.runProcess??runBoundedProcess,home=options.home??homedir();if(!home.startsWith('/'))throw new Error('GitHub CLI home must be absolute');
   const command=async(argv:string[],limits:{timeoutMs:number;maxOutputBytes:number},signal?:AbortSignal)=>{
-    try{const result=await execute({argv,timeoutMs:limits.timeoutMs,maxOutputBytes:limits.maxOutputBytes},signal);if(result.exitCode!==0)throw new Error();return result.stdout;}
+    try{const result=await execute({argv,env:{HOME:home},timeoutMs:limits.timeoutMs,maxOutputBytes:limits.maxOutputBytes},signal);if(result.exitCode!==0)throw new Error();return result.stdout;}
     catch(error){if(error instanceof GitHubCliError)throw error;if(signal?.aborted||error instanceof DOMException&&error.name==='AbortError')throw new GitHubCliError('command-failed','GitHub command cancelled');throw new GitHubCliError('command-failed','GitHub command failed');}
   };
   const read=(argv:string[],signal?:AbortSignal)=>command(argv,{timeoutMs:10_000,maxOutputBytes:1_048_576},signal);

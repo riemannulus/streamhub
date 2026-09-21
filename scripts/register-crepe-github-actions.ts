@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {existsSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
+import {homedir} from 'node:os';
 import {runBoundedProcess,type ProcessRequest,type ProcessResult} from '../packages/actions/system';
 import {CREPE_PIPELINES} from '../packages/github-actions/crepe';
 import {configPath,readConfig,updateConfig} from '../packages/host/src/config';
@@ -37,7 +38,7 @@ function publish(path:string,document:StudioDocument){const temporary=`${path}.$
 
 export async function registerCrepeGitHubActions(dependencies:Partial<Dependencies>={}):Promise<{gh:string;pageId:'crepe-release';draftUpdated:boolean}>{
   const which=dependencies.which??(name=>Bun.which(name)),runProcess=dependencies.runProcess??runBoundedProcess,gh=which('gh');if(!gh||!gh.startsWith('/'))throw new Error('Install and authenticate the gh CLI before registration');
-  try{await runProcess({argv:[gh,'auth','status','--hostname','github.com'],timeoutMs:10_000,maxOutputBytes:65_536});}catch{throw new Error('Authenticate the gh CLI for github.com before registration');}
+  try{await runProcess({argv:[gh,'auth','status','--hostname','github.com'],env:{HOME:homedir()},timeoutMs:10_000,maxOutputBytes:65_536});}catch{throw new Error('Authenticate the gh CLI for github.com before registration');}
   readConfig(true);const studioDirectory=join(dirname(configPath()),'studio'),repository=new StudioRepository(studioDirectory,context),snapshot=repository.snapshot(),next=addCrepeReleasePage(snapshot.document),draftPath=join(studioDirectory,'draft.json');let nextDraft:StudioDocument|undefined,draftUpdated=false;
   if(existsSync(draftPath))try{nextDraft=addCrepeReleasePage(validateStudioDocument(JSON.parse(readFileSync(draftPath,'utf8')),context));}catch{/* preserve an invalid or incompatible draft */}
   updateConfig(config=>({...config,githubActions:{executable:gh,pipelines:CREPE_PIPELINES.map(item=>structuredClone(item))}}));repository.apply(next,snapshot.version);if(nextDraft){publish(draftPath,nextDraft);draftUpdated=true;}

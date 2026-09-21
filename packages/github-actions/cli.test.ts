@@ -6,7 +6,7 @@ import {createGitHubCliGateway} from './cli';
 type Response=ProcessResult|Error;
 function harness(responses:Response[]){
   const calls:ProcessRequest[]=[];
-  const gateway=createGitHubCliGateway({executable:'/opt/homebrew/bin/gh',runProcess:async(request,signal)=>{
+  const gateway=createGitHubCliGateway({executable:'/opt/homebrew/bin/gh',home:'/Users/test',runProcess:async(request,signal)=>{
     calls.push(structuredClone(request));
     if(signal?.aborted)throw new DOMException('aborted','AbortError');
     const response=responses.shift();if(!response)throw new Error('unexpected call');if(response instanceof Error)throw response;return response;
@@ -20,7 +20,7 @@ const job={id:7,name:'deploy-backend',html_url:'https://github.com/cookieplace/c
 test('dispatch uses literal argv and returns only a repository run URL',async()=>{
   const {gateway,calls}=harness([result('https://github.com/cookieplace/crepe/actions/runs/123\n')]);
   expect(await gateway.dispatch(CREPE_PIPELINES[0]!)).toBe('https://github.com/cookieplace/crepe/actions/runs/123');
-  expect(calls[0]).toEqual({argv:['/opt/homebrew/bin/gh','workflow','run','cut-rc.yaml','--repo','cookieplace/crepe','--ref','develop','-f','force-bump=auto'],timeoutMs:60_000,maxOutputBytes:1_048_576});
+  expect(calls[0]).toEqual({argv:['/opt/homebrew/bin/gh','workflow','run','cut-rc.yaml','--repo','cookieplace/crepe','--ref','develop','-f','force-bump=auto'],env:{HOME:'/Users/test'},timeoutMs:60_000,maxOutputBytes:1_048_576});
 });
 
 test('viewer and workflow runs are strictly projected from REST responses',async()=>{
@@ -57,6 +57,6 @@ test('foreign URLs, malformed payloads and process failures become sanitized ada
 test('open accepts only repository action and release URLs and uses the bounded process seam',async()=>{
   const {gateway,calls}=harness([result('')]);
   await gateway.open('cookieplace/crepe','https://github.com/cookieplace/crepe/actions/runs/42/job/7');
-  expect(calls[0]).toEqual({argv:['/usr/bin/open','https://github.com/cookieplace/crepe/actions/runs/42/job/7'],timeoutMs:3_000,maxOutputBytes:4_096});
+  expect(calls[0]).toEqual({argv:['/usr/bin/open','https://github.com/cookieplace/crepe/actions/runs/42/job/7'],env:{HOME:'/Users/test'},timeoutMs:3_000,maxOutputBytes:4_096});
   await expect(gateway.open('cookieplace/crepe','https://github.com/other/repo/actions/runs/1')).rejects.toThrow('Invalid GitHub URL');
 });

@@ -80,6 +80,12 @@ test('bounded process enforces cancellation, timeout and combined output cap',as
   await expect(runBoundedProcess({argv:['/usr/bin/true'],timeoutMs:1000,maxOutputBytes:1024},abort.signal)).rejects.toMatchObject({code:'cancelled'});
 });
 
+test('bounded process passes only explicitly declared trusted environment values',async()=>{
+  const result=await runBoundedProcess({argv:['/usr/bin/env'],env:{STREAMHUB_TEST_VALUE:'isolated'},timeoutMs:1000,maxOutputBytes:65_536});
+  expect(result.stdout).toContain('STREAMHUB_TEST_VALUE=isolated');
+  await expect(runBoundedProcess({argv:['/usr/bin/true'],env:{'BAD=KEY':'value'},timeoutMs:1000,maxOutputBytes:1024})).rejects.toThrow('environment');
+});
+
 test('native helper source compiles into the source-hashed cache without executing input',async()=>{
   if(process.platform!=='darwin')return;
   const directory=mkdtempSync(join(tmpdir(),'streamhub-system-actions-'));

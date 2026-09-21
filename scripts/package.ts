@@ -18,7 +18,7 @@ export type PackageOptions={
 export type PackageResult={root:string;archive:string;archiveSha256:string;version:string;target:typeof releaseTarget};
 
 const packageDirectory=`streamhub-${packageVersion}-${releaseTarget}`;
-const runtimeSourceDirectories=['actions','core','host','presentation','streamdeck','studio'] as const;
+const runtimeSourceDirectories=['actions','core','github-actions','host','presentation','streamdeck','studio'] as const;
 const textExtensions=new Set(['.cjs','.css','.html','.js','.json','.md','.mjs','.plist','.sh','.ts','.txt','.xml','.yaml','.yml']);
 const checksum=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex');
 const copy=(source:string,target:string)=>{mkdirSync(dirname(target),{recursive:true});cpSync(source,target,{recursive:true,preserveTimestamps:true});};

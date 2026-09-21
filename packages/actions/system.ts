@@ -7,7 +7,7 @@ export {KEY_CODES,MEDIA_COMMANDS} from '../studio/document';
 
 const LOCAL_SOURCE='__deck__';
 type NativeAction=Extract<ButtonAction,{type:'hotkey'|'text'|'media'}>;
-export type ProcessRequest={argv:string[];input?:string;cwd?:string;timeoutMs:number;maxOutputBytes:number};
+export type ProcessRequest={argv:string[];input?:string;cwd?:string;env?:Record<string,string>;timeoutMs:number;maxOutputBytes:number};
 export type ProcessResult={stdout:string;stderr:string;exitCode:number};
 export type NativeResult={ok:boolean;error?:'accessibility-permission-required'|'media-unsupported'|'native-action-failed'};
 export type SystemActionDependencies={
@@ -26,9 +26,10 @@ const stopped=(signal?:AbortSignal)=>{if(signal?.aborted)throw new SystemActionE
 export async function runBoundedProcess(request:ProcessRequest,signal?:AbortSignal):Promise<ProcessResult>{
   stopped(signal);
   if(!request.argv.length||!request.argv.every(value=>typeof value==='string'&&!value.includes('\0')))throw new Error('Invalid process argv');
+  if(request.env!==undefined&&Object.entries(request.env).some(([key,value])=>!key||key.includes('=')||key.includes('\0')||typeof value!=='string'||value.includes('\0')))throw new Error('Invalid process environment');
   if(!Number.isInteger(request.timeoutMs)||request.timeoutMs<1||request.timeoutMs>60000)throw new Error('Invalid process timeout');
   if(!Number.isInteger(request.maxOutputBytes)||request.maxOutputBytes<1||request.maxOutputBytes>1048576)throw new Error('Invalid process output limit');
-  const process=Bun.spawn(request.argv,{cwd:request.cwd??processCwd(),env:{PATH:globalThis.process.env.PATH??'/usr/bin:/bin'},stdin:request.input===undefined?'ignore':'pipe',stdout:'pipe',stderr:'pipe',detached:globalThis.process.platform!=='win32'});
+  const process=Bun.spawn(request.argv,{cwd:request.cwd??processCwd(),env:{PATH:globalThis.process.env.PATH??'/usr/bin:/bin',...request.env},stdin:request.input===undefined?'ignore':'pipe',stdout:'pipe',stderr:'pipe',detached:globalThis.process.platform!=='win32'});
   if(request.input!==undefined){process.stdin!.write(request.input);process.stdin!.end();}
   const kill=()=>{try{if(globalThis.process.platform!=='win32')globalThis.process.kill(-process.pid,'SIGKILL');else process.kill('SIGKILL');}catch{/* already exited */}};
   const abort=()=>kill();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)kill();
