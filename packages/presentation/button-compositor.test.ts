@@ -48,6 +48,14 @@ describe('composeButton',()=>{
     expect(hash(off)).not.toBe(hash(on));
   });
 
+  test('runtime status paints an exact seven-pixel band without replacing authored content',async()=>{
+    const background=await png('#101010'),appearance:ButtonAppearance={contentMode:'label-only',label},assets=reader({});
+    const output=await composeButton({appearance,background,assets,runtime:{detail:'승인 대기',statusColor:'#f59e0b'}}),raw=await sharp(output).raw().toBuffer();
+    expect([...raw.subarray(0,3)]).toEqual([245,158,11]);
+    expect([...raw.subarray(8*72*4,8*72*4+3)]).not.toEqual([245,158,11]);
+    await expect(composeButton({appearance,background,assets,runtime:{statusColor:'orange'}})).rejects.toThrow('status color');
+  });
+
   test('rejects backgrounds that are not opaque 72 by 72 PNGs',async()=>{
     await expect(composeButton({appearance:{contentMode:'hidden'},background:await png('#000000',71,72),assets:reader({})})).rejects.toThrow('72×72');
   });

@@ -6,7 +6,7 @@ export type ComposeButtonInput={
   appearance:ButtonAppearance;
   background:Buffer;
   assets:AssetReader;
-  runtime?:{label?:string;detail?:string;badge?:string;toggle?:'off'|'on'};
+  runtime?:{label?:string;detail?:string;badge?:string;toggle?:'off'|'on';statusColor?:string};
 };
 
 const escapeXml=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[character]!));
@@ -46,6 +46,7 @@ function badgeLayer(value:string|undefined):Buffer|undefined{
   const badge=bounded(value,4);if(!badge)return;
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect x="52" y="3" width="17" height="17" rx="8.5" fill="#38d7c5"/><text x="60.5" y="15.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif" font-size="10" font-weight="800" fill="#061018">${escapeXml(badge)}</text></svg>`);
 }
+function statusLayer(value:string|undefined):Buffer|undefined{if(value===undefined)return;if(!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Invalid runtime status color');return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="7" fill="${value}"/></svg>`);}
 
 /** Shared fixed/dynamic key compositor. The input crop is never mutated. */
 export async function composeButton(input:ComposeButtonInput):Promise<Buffer>{
@@ -56,5 +57,6 @@ export async function composeButton(input:ComposeButtonInput):Promise<Buffer>{
   const icon=await iconLayer(input.appearance,input.assets);if(icon)overlays.push(icon);
   const text=textLayer(input.appearance,input.runtime);if(text)overlays.push({input:text,left:0,top:0});
   const badge=badgeLayer(input.runtime?.badge??input.runtime?.toggle?.toUpperCase());if(badge)overlays.push({input:badge,left:0,top:0});
+  const status=statusLayer(input.runtime?.statusColor);if(status)overlays.push({input:status,left:0,top:0});
   return sharp(input.background).ensureAlpha().composite(overlays).png().toBuffer();
 }

@@ -8,3 +8,10 @@ test('DeckVisualRenderer uses the shared compositor for fixed buttons',async()=>
   const result=await new DeckVisualRenderer().render(document,page,deck,assets),actual=result.keyPngs[0],background=await sharp({create:{width:72,height:72,channels:4,background:'#221100'}}).png().toBuffer(),expected=await composeButton({appearance:page.buttons[0].appearance,background,assets,runtime:{label:'Run'}});
   expect(actual.toString('hex')).toBe(expected.toString('hex'));
 });
+
+test('DeckVisualRenderer projects a GitHub pipeline snapshot onto an authored fixed button',async()=>{
+  const document=defaultStudioDocument(),page=document.pages[0];page.appearance={color:'#101010'};page.buttons=[{id:'stg',index:0,behavior:singlePressBehavior({type:'github-pipeline',pipelineId:'crepe-backend-stg',role:'deployment'}),appearance:{contentMode:'label-only',label:{text:'Stg 배포',position:'center',size:'medium',color:'#ffffff'}}}];
+  const deck={index:0,pageCount:1,epoch:0,keys:Array.from({length:15},(_,index)=>index===0?{type:'tile' as const,index,label:'Stg 배포',enabled:false}:{type:'empty' as const,index})},assets={read:async()=>Buffer.alloc(0)};
+  const result=await new DeckVisualRenderer().render(document,page,deck,assets,{toggle:()=>undefined,pipeline:binding=>binding.pipelineId==='crepe-backend-stg'?{binding,state:'approval-required',detail:'승인 대기',color:'#f59e0b',runUrl:'https://github.com/cookieplace/crepe/actions/runs/1'}:undefined}),raw=await sharp(result.keyPngs[0]).raw().toBuffer();
+  expect([...raw.subarray(0,3)]).toEqual([245,158,11]);
+});

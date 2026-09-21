@@ -1,11 +1,12 @@
 import sharp from 'sharp';
 import {createHash} from 'node:crypto';
-import type {StudioAppearance,StudioDocument,StudioPage} from '../studio/document';
+import {actionsInBehavior,type StudioAppearance,type StudioDocument,type StudioPage} from '../studio/document';
 import type {DeckPage} from '../streamdeck';
 import {renderKey} from '../streamdeck/render';
 import {composeButton} from './button-compositor';
 import {extractKeyPngs,keyViewport} from './geometry';
 import type {DeckSurface} from './backend';
+import type {PipelineButtonBinding,PipelineButtonSnapshot} from '../github-actions/types';
 
 export type AssetReader={read(id:string):Promise<Uint8Array>};
 
@@ -17,13 +18,13 @@ export async function renderStudioBackground(appearance:StudioAppearance|undefin
 }
 
 export class DeckVisualRenderer{
-  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckSurface>{return this.renderAppearance(page.appearance,deckPage,page,assets,state);}
+  async render(document:StudioDocument,page:StudioPage,deckPage:DeckPage,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined;pipeline?(binding:PipelineButtonBinding):PipelineButtonSnapshot|undefined}):Promise<DeckSurface>{return this.renderAppearance(page.appearance,deckPage,page,assets,state);}
   async renderStandby(document:StudioDocument,assets:AssetReader):Promise<DeckSurface>{const empty:DeckPage={index:0,pageCount:1,epoch:0,keys:Array.from({length:15},(_,index)=>({type:'empty',index}))};return this.renderAppearance(document.standby,empty,undefined,assets);}
-  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined}):Promise<DeckSurface>{
+  private async renderAppearance(appearance:StudioAppearance|undefined,deckPage:DeckPage,page:StudioPage|undefined,assets:AssetReader,state?:{toggle(pageId:string,buttonId:string):'off'|'on'|undefined;pipeline?(binding:PipelineButtonBinding):PipelineButtonSnapshot|undefined}):Promise<DeckSurface>{
     const background=await renderStudioBackground(appearance,assets),crops=await extractKeyPngs(background),overlays:sharp.OverlayOptions[]=[];
     for(const key of deckPage.keys){
       const fixed=page?.buttons?.find(button=>button.index===key.index);let input:Buffer|undefined;
-      if(fixed){const toggle=page&&state?.toggle(page.id,fixed.id),runtime=key.type==='tile'?{label:key.label,...(key.foot?{detail:key.foot}:{}),...(toggle?{toggle}:{})}:toggle?{toggle}:undefined;input=await composeButton({appearance:fixed.appearance,background:crops[key.index]!,assets,...(runtime?{runtime}:{})});}
+      if(fixed){const toggle=page&&state?.toggle(page.id,fixed.id),binding=actionsInBehavior(fixed.behavior).find(action=>action.type==='github-pipeline'),pipeline=binding&&state?.pipeline?.({pipelineId:binding.pipelineId,role:binding.role}),runtime=key.type==='tile'?{label:key.label,...(pipeline?{detail:pipeline.detail,statusColor:pipeline.color}:key.foot?{detail:key.foot}:{}),...(toggle?{toggle}:{})}:pipeline?{detail:pipeline.detail,statusColor:pipeline.color}:toggle?{toggle}:undefined;input=await composeButton({appearance:fixed.appearance,background:crops[key.index]!,assets,...(runtime?{runtime}:{})});}
       else if(key.type!=='empty')input=await sharp(await renderKey(key,deckPage),{raw:{width:72,height:72,channels:3}}).ensureAlpha().png().toBuffer();
       if(input)overlays.push({input,left:keyViewport(key.index).left,top:keyViewport(key.index).top});
     }

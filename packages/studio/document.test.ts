@@ -97,5 +97,7 @@ describe('StudioDocument v3',()=>{
     expect(()=>validateStudioDocument(mixed,{pipelines:[{id:'crepe-backend-prod'}]})).toThrow('same GitHub pipeline');
     const sequence=structuredClone(document);sequence.pages[0].buttons![0]!.behavior.press={type:'sequence',sequence:{mode:'sequential',steps:[{type:'action',action:{type:'github-pipeline',pipelineId:'crepe-backend-prod',role:'trigger'}}]}};
     expect(()=>validateStudioDocument(sequence,{pipelines:[{id:'crepe-backend-prod'}]})).toThrow('single');
+    const double=structuredClone(document);double.pages[0].buttons![0]!.behavior.doublePress={type:'single',action:{type:'github-pipeline',pipelineId:'crepe-backend-prod',role:'trigger'}};
+    expect(()=>validateStudioDocument(double,{pipelines:[{id:'crepe-backend-prod'}]})).toThrow('press or hold');
   });
 });
