@@ -13,6 +13,10 @@ import {startPresentationCoordinator,type PresentationCoordinator} from './prese
 import {startSessionMonitor,type SessionState} from './session-monitor';
 import {startAppContextMonitor,type ApplicationContext} from './app-context';
 import {FileButtonStateStore} from './button-state';
+import {createGitHubCliGateway} from '../../github-actions/cli';
+import {startGitHubActionsPipeline} from '../../github-actions/pipeline';
+import {SignalStorePipelinePersistence} from '../../github-actions/store';
+import type {GitHubActionsPipeline,GitHubActionsConfig} from '../../github-actions/types';
 
 type Collector = NonNullable<Config['collectors']>[number];
 type HostServer = { url: URL; stop(closeActiveConnections?: boolean): void | Promise<void> };
@@ -24,6 +28,7 @@ export type HostDependencies = {
   sessionMonitor(callback:(state:SessionState)=>void,options:{cacheDir:string}):Promise<{stop():Promise<void>}>;
   contextMonitor(callback:(context:ApplicationContext)=>void,options:{cacheDir:string}):Promise<{stop():Promise<void>}>;
   collect(collector: Collector): Promise<Membership>;
+  githubActions(options:{config:GitHubActionsConfig;store:SignalStore;onError(error:unknown):void}):Promise<GitHubActionsPipeline>;
 };
 export type HostOptions = { signal?: AbortSignal; onError?: (error: unknown) => void; dependencies?: Partial<HostDependencies> };
 export type HostRuntime = { url: URL; stop(): Promise<void> };
@@ -53,6 +58,8 @@ export async function startHost(input: Config, directory: string, options: HostO
   let server: HostServer | undefined;
   let backend:DeckBackend|undefined;
   let pendingBackend:Promise<DeckBackend>|undefined;
+  let pipelines:GitHubActionsPipeline|undefined;
+  let pendingPipelines:Promise<GitHubActionsPipeline>|undefined;
   let presentation:PresentationCoordinator|undefined;
   let presentationMonitor:{stop():Promise<void>}|undefined;
   let startupFailure:unknown;
@@ -71,8 +78,9 @@ export async function startHost(input: Config, directory: string, options: HostO
       // The native compiler is bounded; retain ownership until its late monitor
       // handle has been acquired and disposed, rather than orphaning it on exit.
       let pendingFailure:unknown;
-      if(pendingBackend){try{backend=await pendingBackend;}catch(error){pendingFailure=error;}}
-      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>backend?.stop())]);
+      if(pendingPipelines){try{pipelines=await pendingPipelines;}catch(error){pendingFailure=error;}}
+      if(pendingBackend){try{backend=await pendingBackend;}catch(error){pendingFailure??=error;}}
+      const results:PromiseSettledResult<unknown>[] = await Promise.allSettled([Promise.resolve().then(()=>presentationMonitor?.stop()),Promise.resolve().then(()=>presentation?.stop()),Promise.resolve().then(()=>backend?.stop()),Promise.resolve().then(()=>pipelines?.stop())]);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => server?.stop(true))]));
       results.push(...await Promise.allSettled([...jobs]));
       results.push(...await Promise.allSettled([Promise.resolve().then(() => store?.close())]));
@@ -93,6 +101,10 @@ export async function startHost(input: Config, directory: string, options: HostO
   try {
     store = (dependencies.openStore ?? (path => new SignalStore(path)))(join(directory, 'state.sqlite'));
     checkCancelled();
+    if(config.githubActions){
+      pendingPipelines=(dependencies.githubActions??(async({config,store,onError})=>startGitHubActionsPipeline({definitions:config.pipelines,gateway:createGitHubCliGateway({executable:config.executable}),persistence:new SignalStorePipelinePersistence(store),onError})))({config:config.githubActions,store,onError:report});
+      pipelines=await untilAborted(pendingPipelines,controller.signal);checkCancelled();
+    }
     const reconciler = new Reconciler(store, actions, Object.fromEntries(Object.entries(config.sources).map(([source, value]) => [source, value.allowedHosts ?? []])));
     if(config.display.mode!=='off'){
       const events={key:(event:{index:number;phase:'down'|'up';generation:string})=>{void presentation?.key(event).catch(report);},ready:()=>{void presentation?.backendReady().catch(report);}};
@@ -102,7 +114,7 @@ export async function startHost(input: Config, directory: string, options: HostO
       }else pendingBackend=(dependencies.hidBackend??startHidBackend)({onError:report,events});
       backend=await untilAborted(pendingBackend,controller.signal);
       checkCancelled();
-      presentation=await startPresentationCoordinator({store,directory:join(directory,'studio'),backend,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),buttonState:new FileButtonStateStore(directory)});
+      presentation=await startPresentationCoordinator({store,directory:join(directory,'studio'),backend,execute:createKeyActionExecutor(config.actions,{cacheDir:join(directory,'.streamhub/native/system-actions')}),...(pipelines?{pipelines}:{}),buttonState:new FileButtonStateStore(directory)});
       const sessionMonitor=await(dependencies.sessionMonitor??startSessionMonitor)(state=>{void presentation?.locked(!state.active).catch(report);},{cacheDir:join(directory,'native')});
       const contextMonitor=await(dependencies.contextMonitor??startAppContextMonitor)(context=>{void presentation?.context(context).catch(report);},{cacheDir:join(directory,'native')});
       presentationMonitor={async stop(){const results=await Promise.allSettled([sessionMonitor.stop(),contextMonitor.stop()]);const errors=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected').map(result=>result.reason);if(errors.length)throw new AggregateError(errors,'Presentation monitor cleanup failed');}};
